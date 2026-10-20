@@ -1,0 +1,126 @@
+# ==========================================================
+# .gitignore for the Bill Splitting Calculator
+# Keeps out generated, local, and secret files.
+# Tracked: src/, tests/, docs/, transcripts/, README.md
+# ==========================================================
+
+# ---------- Installed packages / dependencies ----------
+node_modules/
+jspm_packages/
+bower_components/
+.pnp
+.pnp.*
+.yarn/*
+!.yarn/releases
+!.yarn/plugins
+/vendor/
+venv/
+.venv/
+/env/
+__pypackages__/
+
+# ---------- Build output ----------
+dist/
+build/
+out/
+.next/
+.nuxt/
+.output/
+.svelte-kit/
+.vercel/
+.netlify/
+.parcel-cache/
+.turbo/
+*.tsbuildinfo
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.class
+target/
+
+# ---------- Caches ----------
+.cache/
+.eslintcache
+.stylelintcache
+.npm/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.sass-cache/
+.vite/
+.temp/
+.tmp/
+
+# ---------- Test coverage reports (test code itself is tracked) ----------
+coverage/
+.nyc_output/
+htmlcov/
+.coverage
+.coverage.*
+playwright-report/
+test-results/
+
+# ---------- Logs ----------
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ---------- Local database files ----------
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# ---------- Secrets: passwords, keys, credentials ----------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+id_rsa*
+id_ed25519*
+secrets.*
+*.secret
+credentials.json
+service-account*.json
+.npmrc
+.pypirc
+.netrc
+
+# ---------- Editor / IDE settings ----------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+.project
+.classpath
+.settings/
+
+# ---------- OS files ----------
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ---------- Misc ----------
+*.pid
+*.seed
+*.tgz
+.claude/
+.omc/
