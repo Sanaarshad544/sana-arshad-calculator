@@ -323,7 +323,7 @@ test('US-25 #19 on sign up and reset, editing a field removes its own message an
   await page.goto('/signup');
   await expect(page.getByRole('heading', { level: 1, name: 'Create an account' })).toBeVisible();
   await page.getByRole('button', { name: 'Create account' }).click();
-  const usernameRule = page.getByText('Username must be 3–30 characters, using only letters, numbers and _');
+  const usernameRule = page.getByText('Enter a username of 3 to 30 English letters, numbers or underscores, like omar_99');
   const passwordRule = page.getByText('Password must be at least 8 characters');
   await expect(usernameRule).toBeVisible();
   await expect(passwordRule).toBeVisible();
@@ -429,4 +429,13 @@ test('US-41 after adding someone from my other groups, the cursor moves to their
   // Safari moves between buttons with Alt+Tab.
   await page.keyboard.press(browserName === 'webkit' ? 'Alt+Tab' : 'Tab');
   await expect(page.getByRole('region', { name: 'Invite Omar' }).getByRole('button', { name: 'Copy link for Omar' })).toBeFocused();
+});
+
+test('US-01 #5 and US-09 #3 the Username and Group name hints say the rule in plain words', async ({ page }, info) => {
+  await page.goto('/signup');
+  await expect(page.getByLabel('Username')).toHaveAccessibleDescription('3 to 30 English letters, numbers or underscores, like omar_99');
+  await expect(page.getByText(/–|letters, numbers and _/)).toHaveCount(0);
+  await signUpFast(page, info);
+  await page.goto('/groups/new');
+  await expect(page.getByLabel('Group name')).toHaveAccessibleDescription('Up to 50 characters');
 });

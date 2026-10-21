@@ -620,7 +620,7 @@ for (const scheme of ['light', 'dark'] as const) {
       await expect(page.getByRole('heading', { level: 1, name: 'Create group' })).toBeVisible();
       await expectNoA11yViolations(page, 'create group');
       await page.getByRole('button', { name: 'Create group' }).click();
-      await expect(page.getByText('Group name must be 1–50 characters')).toBeVisible();
+      await expect(page.getByText('Enter a group name of up to 50 characters')).toBeVisible();
       await expectNoA11yViolations(page, 'create group with errors');
 
       // A group with a bill and a payment.

@@ -238,7 +238,7 @@ const EDIT_CASES: EditCase[] = [
     },
     bad: 'abcd',
     fix: 'kr',
-    message: 'Currency symbol must be 1–3 characters with no digits',
+    message: 'Enter a currency symbol of up to 3 characters, with no digits',
   },
 ];
 

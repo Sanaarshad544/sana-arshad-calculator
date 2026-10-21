@@ -62,7 +62,7 @@ test('US-25 #13 the largest bill shows exactly 1,000,000,000.00', async ({ page 
   await expect(page.getByTestId('grand-total')).toHaveText('$1,000,000,000.00');
 });
 
-test('US-10 #3 member names must be 1–30 characters', async ({ page }, info) => {
+test('US-10 #3 member names must be 1 to 30 characters', async ({ page }, info) => {
   await signUpFast(page, info);
   const { groupId } = await makeGroup(page, 'Names', '$', []);
   await page.goto(`/groups/${groupId}?tab=members`);
@@ -71,7 +71,7 @@ test('US-10 #3 member names must be 1–30 characters', async ({ page }, info) =
   for (const bad of ['', '   ', 'x'.repeat(31)]) {
     await field.fill(bad);
     await add.click();
-    await expect(page.getByText('Name must be 1–30 characters')).toBeVisible();
+    await expect(page.getByText('Enter a name of up to 30 characters')).toBeVisible();
   }
   await expect(page.getByRole('heading', { name: 'Members (1)' })).toBeVisible();
   for (const good of ['Z', 'y'.repeat(30)]) {

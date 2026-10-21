@@ -201,7 +201,7 @@ for (const scheme of ['light', 'dark'] as const) {
     await expect(page.getByRole('heading', { level: 1, name: "Ali, join your friends' groups" })).toBeVisible();
     await expectNoA11yViolations(page, 'invite link');
     await page.getByRole('button', { name: 'Create account and join' }).click();
-    await expect(page.getByText('Username must be 3–30 characters', { exact: false })).toBeVisible();
+    await expect(page.getByText('Enter a username of 3 to 30', { exact: false })).toBeVisible();
     await expectNoA11yViolations(page, 'invite link with errors');
   });
 }

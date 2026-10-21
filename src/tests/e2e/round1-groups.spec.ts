@@ -10,7 +10,7 @@ import { PASSWORD, api, expectNoA11yViolations, expectNoHorizontalScroll, makeGr
 const INVITE_CODE = /^[A-HJ-NP-Z2-9]{12}$/;
 const WRONG_LOGIN = 'Username or password is incorrect';
 const NAME_USED = 'That name has already been used in this group';
-const USERNAME_RULE = 'Username must be 3–30 characters, using only letters, numbers and _';
+const USERNAME_RULE = 'Enter a username of 3 to 30 English letters, numbers or underscores, like omar_99';
 const PASSWORD_SHORT = 'Password must be at least 8 characters';
 
 interface MemberInfo {
@@ -503,7 +503,7 @@ test('rename: a name already used in the group, in any letter case or by a remov
   await expect(api(page, 'put', `/groups/${groupId}/members/${ids.Sara}`, { name: 'ali' })).rejects.toThrow('409');
 });
 
-test('rename: a blank or 31-character name shows "Name must be 1–30 characters"; exactly 30 is accepted', async ({ page }, info) => {
+test('rename: a blank or 31-character name shows "Enter a name of up to 30 characters"; exactly 30 is accepted', async ({ page }, info) => {
   await signUpFast(page, info);
   const { groupId } = await makeGroup(page, 'Length club', '$', ['Ali']);
   await openGroup(page, groupId, 'Length club', 'members');
@@ -512,7 +512,7 @@ test('rename: a blank or 31-character name shows "Name must be 1–30 characters
   for (const bad of ['', '   ', 'x'.repeat(31)]) {
     await box.fill(bad);
     await page.getByRole('button', { name: 'Save name' }).click();
-    await expect(fieldError(page, 'Name must be 1–30 characters'), `"${bad}"`).toBeVisible();
+    await expect(fieldError(page, 'Enter a name of up to 30 characters'), `"${bad}"`).toBeVisible();
   }
   expect((await memberOf(page, groupId, 'Ali')).name).toBe('Ali');
 
@@ -621,15 +621,15 @@ test('edit group: a blank name or a currency with digits shows its message, and 
   await page.getByLabel('Currency', { exact: true }).selectOption({ label: 'Other' });
   await page.getByLabel('Currency symbol').fill('12');
   await page.getByRole('button', { name: 'Save changes' }).click();
-  await expect(fieldError(page, 'Group name must be 1–50 characters')).toBeVisible();
-  await expect(fieldError(page, 'Currency symbol must be 1–3 characters with no digits')).toBeVisible();
+  await expect(fieldError(page, 'Enter a group name of up to 50 characters')).toBeVisible();
+  await expect(fieldError(page, 'Enter a currency symbol of up to 3 characters, with no digits')).toBeVisible();
 
   // Editing one field clears only that field's message.
   await page.getByLabel('Group name').fill('Checks again');
-  await expect(fieldError(page, 'Group name must be 1–50 characters')).toHaveCount(0);
-  await expect(fieldError(page, 'Currency symbol must be 1–3 characters with no digits')).toBeVisible();
+  await expect(fieldError(page, 'Enter a group name of up to 50 characters')).toHaveCount(0);
+  await expect(fieldError(page, 'Enter a currency symbol of up to 3 characters, with no digits')).toBeVisible();
   await page.getByLabel('Currency symbol').fill('zł');
-  await expect(fieldError(page, 'Currency symbol must be 1–3 characters with no digits')).toHaveCount(0);
+  await expect(fieldError(page, 'Enter a currency symbol of up to 3 characters, with no digits')).toHaveCount(0);
   await page.getByRole('button', { name: 'Save changes' }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'Checks again', exact: true })).toBeVisible();
   await expect(page.getByText('Currency: zł')).toBeVisible();
@@ -857,9 +857,9 @@ test('field messages: on Create group the group-name message goes away as soon a
   await page.goto('/groups/new');
   await expect(page.getByRole('heading', { level: 1, name: 'Create group' })).toBeVisible();
   await page.getByRole('button', { name: 'Create group' }).click();
-  await expect(fieldError(page, 'Group name must be 1–50 characters')).toBeVisible();
+  await expect(fieldError(page, 'Enter a group name of up to 50 characters')).toBeVisible();
   await page.getByLabel('Group name').fill('Trip');
-  await expect(fieldError(page, 'Group name must be 1–50 characters')).toHaveCount(0);
+  await expect(fieldError(page, 'Enter a group name of up to 50 characters')).toHaveCount(0);
 });
 
 test('field messages: on the payment form the amount message goes away as soon as the amount is edited', async ({ page }, info) => {
@@ -1021,7 +1021,7 @@ for (const scheme of ['light', 'dark'] as const) {
       await owner.getByLabel('Currency', { exact: true }).selectOption({ label: 'Other' });
       await owner.getByLabel('Currency symbol').fill('12');
       await owner.getByRole('button', { name: 'Save changes' }).click();
-      await expect(fieldError(owner, 'Group name must be 1–50 characters')).toBeVisible();
+      await expect(fieldError(owner, 'Enter a group name of up to 50 characters')).toBeVisible();
       await expectNoA11yViolations(owner, 'edit group with messages');
     } finally {
       await closeAll(opened);

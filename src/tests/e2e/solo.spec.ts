@@ -119,7 +119,7 @@ test('US-06 #4 a bad custom currency symbol is refused', async ({ page }, info) 
   await page.getByLabel('Currency symbol').fill('R1');
   await page.getByLabel('Item 1 price').fill('5');
   await page.getByRole('button', { name: 'Calculate' }).click();
-  await expect(page.getByText('Currency symbol must be 1–3 characters with no digits')).toBeVisible();
+  await expect(page.getByText('Enter a currency symbol of up to 3 characters, with no digits')).toBeVisible();
   await page.getByLabel('Currency symbol').fill('kr');
   await page.getByRole('button', { name: 'Calculate' }).click();
   await expect(page.getByTestId('grand-total')).toHaveText('kr 5.00');

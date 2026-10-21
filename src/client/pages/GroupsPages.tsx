@@ -89,7 +89,7 @@ export function NewGroupPage() {
         <Alert>{error}</Alert>
         <TextField
           label="Group name"
-          hint="1–50 characters"
+          hint="Up to 50 characters"
           value={name}
           onChange={(v) => {
             setName(v);
@@ -260,7 +260,7 @@ function EditGroupForm({ group }: { group: GroupDetail }) {
         <Alert>{error}</Alert>
         <TextField
           label="Group name"
-          hint="1–50 characters"
+          hint="Up to 50 characters"
           value={name}
           onChange={(v) => {
             setName(v);

@@ -141,7 +141,7 @@ export function SignupPage() {
       <Alert>{error}</Alert>
       <TextField
         label="Username"
-        hint="3–30 characters: letters, numbers and _"
+        hint="3 to 30 English letters, numbers or underscores, like omar_99"
         value={username}
         onChange={(v) => {
           setUsername(v);

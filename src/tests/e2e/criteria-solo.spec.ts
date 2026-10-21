@@ -7,10 +7,10 @@ import { PASSWORD, api, expectNoHorizontalScroll, makeGroup, signUpFast, uniqueN
 // ---------- Messages (as written in the docs and shared rules) ----------
 
 const MSG = {
-  username: 'Username must be 3–30 characters, using only letters, numbers and _',
+  username: 'Enter a username of 3 to 30 English letters, numbers or underscores, like omar_99',
   passwordShort: 'Password must be at least 8 characters',
   passwordLong: 'Password can be at most 128 characters',
-  currency: 'Currency symbol must be 1–3 characters with no digits',
+  currency: 'Enter a currency symbol of up to 3 characters, with no digits',
   billName: 'Bill name can be at most 60 characters',
   itemName: 'Item name can be at most 40 characters',
   price: 'Price must be between 0.01 and 1,000,000.00, with at most 2 decimal places',

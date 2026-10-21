@@ -6,9 +6,9 @@ export const MAX_GROUP_MEMBERS = 50;
 export const CURRENCIES = ['$', '€', '£', '¥', '₹', 'Rs', 'PKR', '₩', '₺', 'R$', 'CHF', 'AED', 'SAR'] as const;
 
 export const MESSAGES = {
-  currency: 'Currency symbol must be 1–3 characters with no digits',
-  groupName: 'Group name must be 1–50 characters',
-  memberName: 'Name must be 1–30 characters',
+  currency: 'Enter a currency symbol of up to 3 characters, with no digits',
+  groupName: 'Enter a group name of up to 50 characters',
+  memberName: 'Enter a name of up to 30 characters',
   nameUsed: 'That name has already been used in this group',
   groupFull: 'A group can have at most 50 members',
   billName: 'Bill name can be at most 60 characters',
@@ -30,7 +30,7 @@ export const MESSAGES = {
   settleAmount: 'Amount must be between 0.01 and 1,000,000.00, with at most 2 decimal places',
   settleSamePerson: 'Choose two different people',
   settlePeople: 'Choose who paid and who received the payment',
-  username: 'Username must be 3–30 characters, using only letters, numbers and _',
+  username: 'Enter a username of 3 to 30 English letters, numbers or underscores, like omar_99',
   passwordShort: 'Password must be at least 8 characters',
   passwordLong: 'Password can be at most 128 characters',
   usernameTaken: 'That username is taken',

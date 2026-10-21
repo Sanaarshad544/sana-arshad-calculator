@@ -225,11 +225,11 @@ test('US-09 #2 pick one of the 13 listed currencies (PKR after Rs) or "Other" an
   expect(groups.map((g) => [g.name, g.currency])).toEqual([['Warsaw trip', 'zł']]);
 });
 
-test('US-09 #3 a blank or 51-character group name shows "Group name must be 1–50 characters" and no group is created', async ({ page }, info) => {
+test('US-09 #3 a blank or 51-character group name shows "Enter a group name of up to 50 characters" and no group is created', async ({ page }, info) => {
   await signUpFast(page, info);
   await page.goto('/groups/new');
   await expect(page.getByRole('heading', { level: 1, name: 'Create group' })).toBeVisible();
-  const message = 'Group name must be 1–50 characters';
+  const message = 'Enter a group name of up to 50 characters';
 
   await page.getByRole('button', { name: 'Create group' }).click();
   await expect(fieldError(page, message)).toBeVisible();

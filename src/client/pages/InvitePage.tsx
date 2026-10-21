@@ -242,7 +242,7 @@ export function InvitePage() {
             <Alert>{formError}</Alert>
             <TextField
               label="Username"
-              hint={mode === 'signup' ? '3–30 characters: letters, numbers and _' : undefined}
+              hint={mode === 'signup' ? '3 to 30 English letters, numbers or underscores, like omar_99' : undefined}
               value={username}
               onChange={(v) => {
                 setUsername(v);

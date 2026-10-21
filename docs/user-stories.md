@@ -22,8 +22,8 @@ These rules come from the spec and apply wherever a story mentions them.
 - **Per-field limit:** the 1,000,000.00 limit applies to each field on its own. A bill's items subtotal and grand total may be larger.
 - **Items:** every bill (solo, equal or itemized) needs 1–200 items. The largest possible grand total is 1,000,000,000.00, and it is still exact to the cent.
 - **Names** (spaces at the start and end are trimmed before checking):
-  - Group name: required, 1–50 characters.
-  - Member name: required, 1–30 characters, and unique within a group: it can't match any other member, current or removed. Not case-sensitive: "omar" clashes with "Omar". Renaming a member frees their old name.
+  - Group name: required, at most 50 characters.
+  - Member name: required, at most 30 characters, and unique within a group: it can't match any other member, current or removed. Not case-sensitive: "omar" clashes with "Omar". Renaming a member frees their old name.
   - Bill name: optional, up to 60 characters, defaulting to "Bill – date".
   - Item name: optional, up to 40 characters, defaulting to "Item 1", "Item 2" and so on.
 - **Tax and tip:** each can be a **%** (0–100, at most 2 decimal places, e.g. 12.5 or 8.25) or an **amount** (0.00–1,000,000.00). Both boxes start empty, and a blank tax or tip means 0.
@@ -39,13 +39,13 @@ These rules come from the spec and apply wherever a story mentions them.
 - **Grand total** = items subtotal + tax + other charges + tip.
 - **Exactness:** for every bill, the shares add up exactly to the grand total.
 - **Results:** totals appear only when **Calculate** is pressed. Changing any input hides the old result until Calculate is pressed again.
-- **Currency:** a display symbol only, with no conversion. Choose from the list of 13 ($, €, £, ¥, ₹, Rs, PKR, ₩, ₺, R$, CHF, AED, SAR), or choose "Other" and type a symbol of 1–3 characters with no digits. A listed symbol typed under "Other" in different letters ("pkr") is saved the listed way ("PKR"). A group's currency can be changed at any time, which relabels every amount without converting it.
+- **Currency:** a display symbol only, with no conversion. Choose from the list of 13 ($, €, £, ¥, ₹, Rs, PKR, ₩, ₺, R$, CHF, AED, SAR), or choose "Other" and type a symbol of 1 to 3 characters with no digits. A listed symbol typed under "Other" in different letters ("pkr") is saved the listed way ("PKR"). A group's currency can be changed at any time, which relabels every amount without converting it.
 - **Accounts:**
-  - Username: 3–30 characters (letters, numbers, underscore), not case-sensitive.
+  - Username: 3 to 30 English letters, numbers or underscores (like omar_99), not case-sensitive.
   - Password: at least 8 characters (and at most 128), any characters. Every password box has an eye button to show or hide what's typed.
   - A session ends on Log out or after 30 days without use.
   - **Wrong tries:** after 5 wrong passwords in a row for a username, each next try must wait: 30 seconds, then 1, 2 and 5 minutes, then 15 minutes for every try after that. Nobody is ever locked out: once the wait is over, the right password works. The count starts again after a successful login, or after a day without tries. Recovery codes are counted separately in the same way.
-- **Group size:** 1–50 **current** members. Removed members don't count.
+- **Group size:** 1 to 50 **current** members. Removed members don't count.
 - **People and invites:** everyone added to a group by name is a *person*, and the same person can be added to several groups by picking them from "Or add someone from your other groups". Each person who hasn't joined yet has their own invite code (12 letters and numbers, shown in groups of four, e.g. "K7QM XW3P 9HTD") and link (`/invite/<code>`). Using it once links every group that person is in to one account. There is no group-wide code.
   - **Who can see a code:** one code opens all of that person's groups, so only current members who are in every one of those groups can see, copy and share it. For someone in just one group, that's every current member of it.
   - **When a code changes:** when someone with an account leaves or is removed from a group, everyone in that group who hasn't joined gets a new code. When a person is added to another group that someone who could see their code isn't in, they get a new code too. Old links then show "That invite link isn't valid. Check the code and try again."
@@ -64,7 +64,7 @@ These rules come from the spec and apply wherever a story mentions them.
 - **Retired:** US-24 "Rejoin a group with the invite code" was retired in QA round 1. There is no group-wide code any more, and removed members come back only through Restore (US-23).
 - **How it was checked:** `npm test` (run from `src/`) passed twice in a row:
   - 215 unit and server tests.
-  - 268 browser tests, each run in Chromium (Chrome and Edge), Firefox and WebKit (Safari), 804 runs in all, with automatic WCAG 2.2 AA checks in light and dark mode.
+  - 269 browser tests, each run in Chromium (Chrome and Edge), Firefox and WebKit (Safari), 807 runs in all, with automatic WCAG 2.2 AA checks in light and dark mode.
 - **Checks done by hand,** because a test can't stop Docker or install the app from scratch:
   - US-27 #3: stopping the database while the app runs, then starting it again.
   - US-28: `docker compose down` then `docker compose up -d`, and restarting the app.
@@ -144,7 +144,7 @@ Acceptance criteria:
 2. Given I leave the recovery code screen, then that code is never shown again.
 3. Given a username that is already taken, when I sign up, then I see "That username is taken" and no account is created.
 4. Given "Sana" already exists, when someone signs up as "sana" or "SANA", then they see "That username is taken" (usernames aren't case-sensitive).
-5. Given a username that is blank, 2 characters or 31 characters long, or contains anything other than letters, numbers and underscore (e.g. "sana!" or "sa na"), when I sign up, then a clear message is shown and no account is created.
+5. Given a username that is blank, 2 characters or 31 characters long, or contains anything other than English letters, numbers and underscores (e.g. "sana!" or "sa na"), when I sign up, then I see "Enter a username of 3 to 30 English letters, numbers or underscores, like omar_99" and no account is created. The hint under Username reads "3 to 30 English letters, numbers or underscores, like omar_99".
 6. Given a username of exactly 3 or exactly 30 characters, then it's accepted.
 7. Given a password that is blank or 7 characters long, when I sign up, then I see "Password must be at least 8 characters". Given 129 characters, I see "Password can be at most 128 characters". Either way no account is created, and the hint under the box reads "At least 8 characters".
 8. Given a password of exactly 8 or exactly 128 characters, including spaces and symbols, then it's accepted.
@@ -223,7 +223,7 @@ Acceptance criteria:
 1. Given a new solo bill, when I open the currency picker, then it offers exactly $, €, £, ¥, ₹, Rs, PKR, ₩, ₺, R$, CHF, AED, SAR and "Other", with PKR in capitals.
 2. Given I pick a symbol from the list, then every amount on the bill is shown with that symbol, and no currency conversion happens.
 3. Given I pick "Other" and type "kr" or "zł", then every amount is shown with that symbol.
-4. Given "Other" with a blank symbol, a symbol of 4+ characters (e.g. "abcd") or one containing a digit (e.g. "R1"), when I press Calculate or Save, then I see "Currency symbol must be 1–3 characters with no digits" and nothing is saved.
+4. Given "Other" with a blank symbol, a symbol of 4+ characters (e.g. "abcd") or one containing a digit (e.g. "R1"), when I press Calculate or Save, then I see "Enter a currency symbol of up to 3 characters, with no digits" and nothing is saved.
 5. Given "Other" with " kr " (spaces around it), then it's saved as "kr".
 6. Given an unsaved bill, I can change its currency freely.
 7. Given the bill has been saved once, when I edit it, then the currency can't be changed.
@@ -261,8 +261,8 @@ Acceptance criteria:
 
 Acceptance criteria:
 1. Given I enter a group name and pick a currency, when I create the group, then I'm its first and only current member, and the activity log records "X created the group".
-2. Given I'm choosing the group's currency, then I can pick from the list of 13 or choose "Other" and type a symbol of 1–3 characters with no digits (same rules and message as US-06). A note tells me I can change it later and that amounts aren't converted.
-3. Given a blank group name, or one of 51 or more characters, when I create the group, then a clear message is shown and no group is created. Names of exactly 1 and exactly 50 characters are accepted.
+2. Given I'm choosing the group's currency, then I can pick from the list of 13 or choose "Other" and type a symbol of 1 to 3 characters with no digits (same rules and message as US-06). A note tells me I can change it later and that amounts aren't converted.
+3. Given a blank group name, or one of 51 or more characters, when I create the group, then I see "Enter a group name of up to 50 characters" and no group is created. Names of exactly 1 and exactly 50 characters are accepted. The hint under Group name reads "Up to 50 characters".
 4. Given a group exists, then its name and currency can be changed later (US-39).
 5. Given a group, then all its bills, settle-ups and balances use the group's single currency.
 
@@ -273,7 +273,7 @@ Acceptance criteria:
 Acceptance criteria:
 1. Given I add a name-only member "Omar", then Omar can immediately be ticked as a participant, and chosen as the payer of a bill he takes part in, and the activity log records "X added Omar".
 2. Given the group has 50 current members, when I add another, then I see "A group can have at most 50 members" and nobody is added.
-3. Given a blank name, or one of 31 or more characters, when I add it, then a clear message is shown and nobody is added. Names of exactly 1 and exactly 30 characters are accepted.
+3. Given a blank name, or one of 31 or more characters, when I add it, then I see "Enter a name of up to 30 characters" and nobody is added. Names of exactly 1 and exactly 30 characters are accepted.
 4. Given "Omar" is a current member, when I add "Omar", "omar" or "OMAR", then I see "That name has already been used in this group" and nobody is added.
 5. Given "Omar" is a removed member, when I add a new "Omar" (in any letter case), then I see "That name has already been used in this group" and nobody is added. The name stays Omar's while he has it, so restoring him gives it back.
 6. Given 49 current members and some removed members, when I add one more, then it succeeds, because removed members don't count toward the 50.
@@ -629,7 +629,7 @@ Acceptance criteria:
 1. Given I press "Rename" next to a member, type a new name and press "Save name", then the new name shows everywhere, including old bills and balances, and the log records "X renamed ghania to Ghania".
 2. Given the new name matches another member in any letter case, then I see "That name has already been used in this group" and nothing changes.
 3. Given a member was renamed, then their old name is free and can be given to someone else.
-4. Given a blank or 31-character name, then I see "Name must be 1–30 characters".
+4. Given a blank or 31-character name, then I see "Enter a name of up to 30 characters".
 5. Given I rename someone who hasn't joined yet, then their invite page and the lists in my other groups show the new name.
 6. Given the rename box is open, when I press Save name, Cancel or Esc, then it closes and the cursor goes back to that member's Rename button.
 
