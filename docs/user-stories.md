@@ -46,6 +46,12 @@ These rules come from the spec and apply wherever a story mentions them.
   - A session ends on Log out or after 30 days without use.
   - There is no limit on failed login or recovery-code attempts.
 - **Group size:** 1–50 **current** members. Removed members don't count.
+- **Language and number display:**
+  - All text is in English.
+  - Amounts are shown with a thousands comma and 2 decimals ("1,000,000.00").
+  - The currency symbol goes before the amount ("$12.50"), with a space for symbols made of letters ("Rs 400.00", "CHF 12.00").
+  - Typing "1,000.50" is accepted as 1000.50, while European style ("1.000,50") is rejected.
+- **Layout:** desktop-first, and fully usable on phones down to 360 px wide.
 
 ## Story list
 
@@ -80,6 +86,12 @@ These rules come from the spec and apply wherever a story mentions them.
 | US-27 | Keep my inputs when saving fails | Solo diner, Group member | J14 | Not implemented |
 | US-28 | Keep my records after a restart | Solo diner, Group member | J2, J6 | Not implemented |
 | US-29 | Use the app in my usual browser | Solo diner, Group member | J16 | Not implemented |
+| US-33 | See my money at a glance on the Dashboard | Solo diner, Group member | J20 | Not implemented |
+| US-34 | Find my way on a computer or a phone | Solo diner, Group member | J16 | Not implemented |
+| US-35 | Choose light or dark appearance | Solo diner, Group member | J21 | Not implemented |
+| US-36 | Use the app with a keyboard, screen reader or zoom | Solo diner, Group member | J22 | Not implemented |
+| US-37 | Know what happened after every action | Solo diner, Group member | J14 | Not implemented |
+| US-38 | Don't lose unsaved changes by accident | Solo diner, Group member | J14 | Not implemented |
 | US-30 | Run the app locally from the README | Host | J17 | Not implemented |
 | US-31 | Deploy the app to my own server | Host | J18 | Not implemented |
 | US-32 | Run all tests with one command | Host | J19 | Not implemented |
@@ -286,6 +298,9 @@ Acceptance criteria:
 7. Given a participant with no items, and other charges of 5.00 on the bill, then that participant's other-charges part is 0.00, and they owe 0.00 in total (food, tax, other charges and tip).
 8. Given an item with nobody ticked, when I press Calculate, then I see "Choose who shared this item" next to it and no result.
 9. Given any valid itemized bill, then the per-person totals add up exactly to the grand total.
+10. Given an item row, when I open its people dropdown, then it lists only this bill's participants, each with a tick box, and I can tick one or several.
+11. Given I've ticked Ali, Sara and Omar for an item and closed the dropdown, then the row shows "Ali, Sara, Omar".
+12. Given I untick a participant from the bill, then they disappear from every item's dropdown, and items left with nobody ticked show "Choose who shared this item" when I press Calculate.
 
 ### US-15 Record who paid a group bill
 **As a** Group member, **I want** to record which participant paid the bill, **so that** they're credited and the others owe them.
@@ -308,6 +323,9 @@ Acceptance criteria:
 3. Given several members owe and are owed, then the suggestions use the fewest payments that bring every balance to 0.00 (largest debtor matched to largest creditor), shown as "X pays Y amount".
 4. Given every balance is 0.00, then no suggestions are shown.
 5. Given a removed member, then they don't appear in the balance list or the suggestions.
+6. Given I open a group, then the balances and suggested payments are at the top of the page, an "Add bill" button is visible, and the tabs Bills, Settle-ups, Members and Activity are below. The invite code and Removed members are on the Members tab.
+7. Given the suggestion "Sara pays Ali 13.00", when I press "Record this payment", then the settle-up form opens pre-filled with Sara → Ali and 13.00, and nothing is saved until I confirm. I can change the amount before confirming.
+8. Given balances are shown, then money owed to a member is green with "+" and "is owed", and money a member owes is red with "−" and "owes". Colour is never the only signal.
 
 ### US-17 Record a settle-up
 **As a** Group member, **I want** to record that one member paid another back, **so that** balances reflect repayments.
@@ -429,6 +447,8 @@ Acceptance criteria:
 14. Given an item name left blank, then it's shown as "Item N" by its position. An item name of exactly 40 characters is accepted, and 41 or more shows a clear message and no result.
 15. Given any input at all, then the app never shows NaN, Infinity, "undefined", or a blank or crashed screen.
 16. Given invalid data is sent straight to the server, bypassing the page, then the server rejects it and saves nothing.
+17. Given I type "1,000.50" or "1000.50" in a money field, then both are accepted as 1000.50.
+18. Given I type "1.000,50" (European style) or a misplaced comma such as "10,00", then the field's normal message is shown and no result.
 
 ### US-26 Carry on safely after a result or an error
 **As a** Solo diner or Group member, **I want** results and errors to update correctly as I keep working, **so that** I never act on an out-of-date figure.
@@ -439,6 +459,10 @@ Acceptance criteria:
 2. Given a result is showing, when I change any input, then the old result is hidden until I press Calculate again.
 3. Given a result is showing, when I switch tax, tip or other charges between % and amount, or change the "tip on" option, then the old result is hidden until I press Calculate again.
 4. Given I press Calculate several times without changing anything, then the same result is shown each time.
+5. Given a new bill form, then the results area below the form reads "Press Calculate to see results".
+6. Given valid inputs, when I press Calculate, then the results appear below the form, on every screen size, and the page scrolls down to them.
+7. Given results are showing, when I change any input, then the results area goes back to "Press Calculate to see results".
+8. Given a bill in Rs with a total of 1234567.5 and a share of 400, then the results show "Rs 1,234,567.50" and "Rs 400.00". In $ they show "$1,234,567.50" and "$400.00".
 
 ### US-27 Keep my inputs when saving fails
 **As a** Solo diner or Group member, **I want** my entries kept if a save fails, **so that** I don't have to type everything again.
@@ -464,6 +488,80 @@ Acceptance criteria:
 
 Acceptance criteria:
 1. Given the current version of Chrome, Edge, Firefox or Safari, when I use every feature above, then it behaves the same way and every acceptance criterion passes.
+
+---
+
+## Screens, appearance and accessibility
+
+### US-33 See my money at a glance on the Dashboard
+**As a** Solo diner or Group member, **I want** a home screen that sums up what I owe and what I'm owed, **so that** I know where I stand the moment I log in.
+- **Job:** J20 · **Status:** Not implemented
+
+Acceptance criteria:
+1. Given I log in, then I land on the Dashboard.
+2. Given I'm in groups, then the Dashboard shows "You owe" and "You're owed" totals across all my groups, one line per currency.
+3. Given I'm in one group using $ and another using Rs, then the Dashboard shows separate $ and Rs totals, never one combined number.
+4. Given I'm in groups, then each group is listed with my own balance in it, and clicking a group opens its page.
+5. Given I have solo bills, then my latest solo bills are listed, newest first.
+6. Given the Dashboard, then "New solo bill" and "New group bill" buttons are visible.
+7. Given I have no groups and no solo bills, then each section shows a short explanation and a button for the next step instead of an empty space.
+8. Given every balance across my groups is 0.00, then the Dashboard says I owe nothing and am owed nothing.
+
+### US-34 Find my way on a computer or a phone
+**As a** Solo diner or Group member, **I want** clear navigation that works on a big screen and a small one, **so that** I can use whichever device I have with me.
+- **Job:** J16 · **Status:** Not implemented
+
+Acceptance criteria:
+1. Given a screen 1280 px wide, then a left sidebar with Dashboard, Solo bills, Groups and Account is always visible.
+2. Given a screen 375 px wide, then the sidebar is replaced by a menu button at the top, which opens the same four links.
+3. Given any page at any width from 360 px up, then all content fits with no sideways scrolling of the page.
+4. Given I'm on a page, then its sidebar or menu link is highlighted, so I can see where I am.
+5. Given the Account page, then it shows my username, the appearance setting and a Log out button.
+
+### US-35 Choose light or dark appearance
+**As a** Solo diner or Group member, **I want** the app to be light or dark to suit my surroundings, **so that** figures are comfortable to read day or night.
+- **Job:** J21 · **Status:** Not implemented
+
+Acceptance criteria:
+1. Given the appearance setting is "Device" (the default) and my device is in dark mode, then the app is dark. When the device switches to light mode, the app follows.
+2. Given I choose "Light" or "Dark" on the Account page, then the app uses that look regardless of my device setting.
+3. Given I chose "Dark", when I log out and back in (on any computer), then the app is still dark, because the choice is saved with my account.
+4. Given either theme, then all text has at least 4.5:1 contrast, and owed / owes amounts keep their "+" / "−" and words as well as colour.
+
+### US-36 Use the app with a keyboard, screen reader or zoom
+**As a** Solo diner or Group member, **I want** every feature to work without a mouse, with a screen reader and at large text sizes, **so that** I can manage my money on my own.
+- **Job:** J22 · **Status:** Not implemented
+
+Acceptance criteria:
+1. Given I use only the keyboard, then I can sign up, log in, create a group, add members, add an itemized bill (including choosing people in the item dropdowns), calculate, save, record a settle-up and log out, with a clearly visible focus outline at every step.
+2. Given a confirmation dialog is open, then keyboard focus stays inside it, and Esc closes it the same way as Cancel.
+3. Given a screen reader, then every field has a label, each error is read out with its field, and new results and success messages are announced.
+4. Given 200% browser zoom, then every page is still usable with no lost content or functions.
+5. Given any button, link or tick box, then its touch or click area is at least 24×24 px.
+6. Given any page in light or dark mode, when the automated accessibility checks run as part of `npm test`, then they report no WCAG 2.2 AA violations.
+
+### US-37 Know what happened after every action
+**As a** Solo diner or Group member, **I want** clear signs when something is saving, saved, loading or empty, **so that** I'm never unsure whether it worked and never save something twice.
+- **Job:** J14 · **Status:** Not implemented
+
+Acceptance criteria:
+1. Given I save a bill, record a payment or remove a member, then a short corner message appears ("Bill saved", "Payment recorded", "Member removed"), disappears after 5 seconds, and is announced by screen readers.
+2. Given I press Save, then the button shows "Saving…" and is disabled until the save finishes.
+3. Given I double-click Save, then only one bill is created.
+4. Given a page is loading its data, then grey placeholder shapes are shown until the content appears.
+5. Given I have no groups, then the Groups page shows "No groups yet. Create one to start splitting with friends." with a Create group button. Empty solo-bill, group-bill and activity lists likewise explain what to do next.
+6. Given I press Delete, Remove member, Leave or close out a group, then a pop-up asks me to confirm. The dangerous button is red, and Cancel or Stay is the safe default.
+
+### US-38 Don't lose unsaved changes by accident
+**As a** Solo diner or Group member, **I want** a warning before I leave a bill I haven't saved, **so that** I don't lose a long receipt I've typed in.
+- **Job:** J14 · **Status:** Not implemented
+
+Acceptance criteria:
+1. Given I've changed a bill form without saving, when I click a sidebar link, the back button or any other link, then I'm asked "You have unsaved changes. Leave without saving?" with Stay and Leave.
+2. Given that question, when I press Stay, then I stay on the form with everything I typed.
+3. Given that question, when I press Leave, then I go to the other page and the changes are discarded. Nothing is saved as a draft.
+4. Given I've changed a bill form without saving, when I close or reload the browser tab, then the browser's own "Leave site?" prompt appears.
+5. Given I haven't changed anything, or I've just saved, when I leave the form, then no warning appears.
 
 ---
 

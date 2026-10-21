@@ -64,5 +64,6 @@ They must never:
 
 ## Notes
 
+- **Both app roles get the same screens and comforts.** Solo diners and Group members both start on a Dashboard that sums up their money. Both can use the app on a computer or a phone, in light or dark mode, and with a keyboard, screen reader or large zoom.
 - **One person can hold several roles.** The same account can keep solo bills (Solo diner) and belong to groups (Group member).
 - **Name-only members are not a role.** Friends who never sign up exist only as names inside a group. They can be chosen as a participant, and as the payer of bills they took part in, but they never use the app themselves unless they later create an account and claim their name.

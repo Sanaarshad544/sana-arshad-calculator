@@ -72,6 +72,18 @@ When I pay in a particular currency, I want amounts shown with that currency's s
 When I need to work out or check a bill, I want to do it in whichever common, up-to-date web browser I already use, so I can avoid installing or buying anything extra.
 - Roles: Solo diner, Group member
 
+**J20. See my overall position at a glance**
+When I have money spent on my own and money owed between me and several groups of friends, I want one overview of what I owe and what I'm owed, so I can know where I stand without adding things up across places.
+- Roles: Solo diner, Group member
+
+**J21. Read figures comfortably in any light**
+When I check money figures in a bright room or a dim restaurant at night, I want the display to suit the lighting and my own preference, so I can read amounts without strain.
+- Roles: Solo diner, Group member
+
+**J22. Manage money without a mouse or perfect eyesight**
+When I rely on a keyboard, software that reads text aloud, large text or high contrast, I want to do everything anyone else can do with my money records, so I can manage bills on my own without asking for help.
+- Roles: Solo diner, Group member
+
 ## Host
 
 **J17. Try it on my own computer for free**
