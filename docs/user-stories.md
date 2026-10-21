@@ -78,7 +78,7 @@ These rules come from the spec and apply wherever a story mentions them.
 | US-25 | Get a clear message for every invalid input | Solo diner, Group member | J14 | Not implemented |
 | US-26 | Carry on safely after a result or an error | Solo diner, Group member | J14 | Not implemented |
 | US-27 | Keep my inputs when saving fails | Solo diner, Group member | J14 | Not implemented |
-| US-28 | Keep my records after a server restart | Solo diner, Group member | J2, J6 | Not implemented |
+| US-28 | Keep my records after a restart | Solo diner, Group member | J2, J6 | Not implemented |
 | US-29 | Use the app in my usual browser | Solo diner, Group member | J16 | Not implemented |
 | US-30 | Run the app locally from the README | Host | J17 | Not implemented |
 | US-31 | Deploy the app to my own server | Host | J18 | Not implemented |
@@ -447,13 +447,16 @@ Acceptance criteria:
 Acceptance criteria:
 1. Given the server can't be reached, when I save, then I see "Couldn't save — check your connection" and all my inputs are kept.
 2. Given a save failed, when the server is reachable again and I press Save, then the bill is saved normally.
+3. Given the app's database stops while I'm using the app, when I save, then a clear message is shown, my inputs are kept, and nothing is half-saved. Once the database is back, saving works without restarting the app.
+4. Given a save fails partway (e.g. the database stops mid-save), then none of that save is stored: no bill without its items, no balance change without its activity log entry.
 
-### US-28 Keep my records after a server restart
-**As a** Solo diner or Group member, **I want** my bills, groups and balances to still be there after the app's server restarts, **so that** my history is never lost.
+### US-28 Keep my records after a restart
+**As a** Solo diner or Group member, **I want** my bills, groups and balances to still be there after the app or its database restarts, **so that** my history is never lost.
 - **Jobs:** J2, J6 · **Status:** Not implemented
 
 Acceptance criteria:
-1. Given I've saved solo bills, groups, group bills and settle-ups, when the server is stopped and started again, then all of them, and all balances and activity logs, are exactly as before.
+1. Given I've saved solo bills, groups, group bills and settle-ups, when the app server is stopped and started again, then all of them, and all balances and activity logs, are exactly as before.
+2. Given the same saved data, when the database container is stopped and started again (including `docker compose down` then `docker compose up -d`), then everything is exactly as before.
 
 ### US-29 Use the app in my usual browser
 **As a** Solo diner or Group member, **I want** the app to work in the current version of my usual browser, **so that** I don't need to install anything.
@@ -471,25 +474,33 @@ Acceptance criteria:
 - **Job:** J17 · **Status:** Not implemented
 
 Acceptance criteria:
-1. Given Node.js LTS is installed, when I follow the README steps on a fresh clone (install, start, open the address), then the app runs and I can sign up locally.
+1. Given Node.js LTS and Docker are installed, when I follow the README steps on a fresh clone (copy `.env.example` to `.env`, `docker compose up -d`, `npm install`, `npm run dev`, open the shown address), then the app runs and I can sign up locally.
 2. Given the README, then it never asks for a paid account, an API key, or any third-party cloud or paid service.
-3. Given the app is running, then it works with no internet-based service: accounts, data storage and calculations all happen inside the app and its own database file.
+3. Given the app is running, then it works with no internet-based service: accounts, data storage and calculations all happen inside the app and its own self-hosted PostgreSQL container.
+4. Given the database container isn't running, when I start the app, then it prints "Can't reach the database. Start it with: docker compose up -d" and stops, with no crash trace.
+5. Given a fresh database, when the app starts, then it creates its own tables automatically. No manual database setup is needed.
+6. Given the database container is running, then its port is reachable only from my own computer, not from other machines on the network.
+7. Given the README, then it warns that `docker compose down -v` permanently deletes all saved data, and that plain `docker compose down` keeps it.
 
 ### US-31 Deploy the app to my own server
 **As a** Host, **I want** to run the same app on a server, **so that** my friends can use it for real.
 - **Job:** J18 · **Status:** Not implemented
 
 Acceptance criteria:
-1. Given a server with Node.js LTS, when I deploy the same build, then it runs, configured only through settings the app owns: port, database file location and session secret.
+1. Given a server with Node.js LTS and a self-hosted PostgreSQL 18 database (e.g. the same Compose file), when I deploy the same build, then it runs, configured only through settings the app owns: port, `DATABASE_URL` and session secret.
 2. Given the deployed app, then it doesn't depend on any third-party cloud or paid service.
 3. Given the deployed app, then passwords are stored hashed (never as plain text), and sessions use secure cookies.
+4. Given the deployed app starts against a database that already has data, then pending schema updates are applied automatically and existing data is kept.
 
 ### US-32 Run all tests with one command
 **As a** Host, **I want** to run every automated test with one command, **so that** I can see for myself that the app works as described.
 - **Job:** J19 · **Status:** Not implemented
 
 Acceptance criteria:
-1. Given the project is installed, when I run the single test command from the README, then the calculation, validation and server tests and the browser tests (Chromium, Firefox and WebKit, Safari's engine) all run and pass.
+1. Given the project is installed and the database container is running, when I run `npm test`, then the calculation, validation and server tests and the browser tests (Chromium, Firefox and WebKit, Safari's engine) all run and pass.
+2. Given I have real bills saved in the app, when I run `npm test`, then the tests use only the separate test database, which is wiped and rebuilt at the start of each run, and my real data is unchanged.
+3. Given I run `npm test` twice in a row, then both runs give the same results.
+4. Given the database container isn't running, when I run `npm test`, then it stops at once with "Can't reach the database. Start it with: docker compose up -d".
 
 ---
 

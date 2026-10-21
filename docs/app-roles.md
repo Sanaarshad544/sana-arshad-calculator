@@ -43,12 +43,13 @@ They must never:
 A **Host** is someone who installs and runs their own copy of the app. This is either a reviewer checking the project on their own computer, or someone running it on a server so their friends can use it. They don't need to know how the app works inside, but they need it to start reliably by following the README, with nothing to buy or sign up for.
 
 They can:
-- install it with only free software (Node.js LTS) and start it by following the README
-- run it on a server, configured only through settings the app owns (port, database file location, session secret)
-- run all of the app's automated tests with one command
+- install it with only free software (Node.js LTS and Docker), start its own PostgreSQL database container, and start the app by following the README
+- run it on a server, configured only through settings the app owns (port, `DATABASE_URL`, session secret), with a self-hosted PostgreSQL database
+- run all of the app's automated tests with one command, against a separate test database that never touches real data
 
 They must never:
-- need a paid account, an API key or any third-party cloud or paid service to install, run, test or deploy the app
+- need a paid account, an API key or any third-party cloud or paid service to install, run, test or deploy the app. The PostgreSQL database is self-hosted and runs in their own container.
+- lose saved data by restarting the app or the database container
 
 ## How the roles differ
 
