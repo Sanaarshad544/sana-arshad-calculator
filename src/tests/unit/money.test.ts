@@ -70,8 +70,8 @@ describe('formatting (US-26 #8)', () => {
 });
 
 describe('currency symbols (US-06)', () => {
-  it('offers exactly the 12 default symbols', () => {
-    expect([...CURRENCIES]).toEqual(['$', '€', '£', '¥', '₹', 'Rs', '₩', '₺', 'R$', 'CHF', 'AED', 'SAR']);
+  it('offers exactly the 13 listed symbols, PKR in capitals', () => {
+    expect([...CURRENCIES]).toEqual(['$', '€', '£', '¥', '₹', 'Rs', 'PKR', '₩', '₺', 'R$', 'CHF', 'AED', 'SAR']);
   });
 
   it('accepts 1-3 characters with no digits, trimmed', () => {
@@ -79,6 +79,9 @@ describe('currency symbols (US-06)', () => {
     expect(checkCurrency('zł')).toEqual({ ok: true, value: 'zł' });
     expect(checkCurrency(' kr ')).toEqual({ ok: true, value: 'kr' });
     expect(checkCurrency('CHF')).toEqual({ ok: true, value: 'CHF' });
+    // A listed symbol is written the listed way, however it's typed.
+    expect(checkCurrency('pkr')).toEqual({ ok: true, value: 'PKR' });
+    expect(checkCurrency('rs')).toEqual({ ok: true, value: 'Rs' });
   });
 
   it.each(['', '   ', 'abcd', 'R1', '٣'])('rejects %j with the docs message', (raw) => {

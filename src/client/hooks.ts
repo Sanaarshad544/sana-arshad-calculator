@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { ApiError } from './api.js';
+import { focusFirstError } from './billEditor.js';
 
 /**
  * Runs one save at a time. While busy, more clicks do nothing, so a
@@ -61,4 +62,17 @@ export function useLoad<T>(load: () => Promise<T>, deps: unknown[]): Loaded<T> {
   }, deps);
 
   return { data, error, loading, reload };
+}
+
+/**
+ * Moves the cursor to the first field with a message, once the messages are on
+ * screen. Use it after an await (e.g. the server rejected a field), when the new
+ * messages are drawn later than a plain setTimeout would run.
+ */
+export function useFocusFirstError(root: RefObject<HTMLElement | null>): () => void {
+  const [requests, setRequests] = useState(0);
+  useEffect(() => {
+    if (requests > 0) focusFirstError(root.current);
+  }, [requests, root]);
+  return useCallback(() => setRequests((n) => n + 1), []);
 }

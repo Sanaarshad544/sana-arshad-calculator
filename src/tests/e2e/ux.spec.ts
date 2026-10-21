@@ -84,7 +84,7 @@ test('US-36 #4 usable at 200% zoom (half the width in CSS pixels)', async ({ pag
   await page.setViewportSize({ width: 640, height: 400 });
   await signUpFast(page, info);
   const { groupId } = await makeGroup(page, 'Zoomed in', '$', ['Ali']);
-  for (const path of ['/', '/solo/new', `/groups/${groupId}`, `/groups/${groupId}/bills/new`, '/account']) {
+  for (const path of ['/', '/solo/new', `/groups/${groupId}`, `/groups/${groupId}/bills/new`, '/settings']) {
     await page.goto(path);
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
     await expectNoHorizontalScroll(page);
@@ -221,7 +221,9 @@ test('US-36 #1 the whole journey works with only the keyboard', async ({ page, b
   await tabTo(page, page.getByLabel('Add a friend by name'), key);
   await page.keyboard.type('Ali');
   await page.keyboard.press('Enter');
-  await expect(page.getByText('has an account').or(page.getByText('name only')).last()).toBeVisible();
+  // Ali has no account yet, so he's listed as not joined, with his own invite code and a Copy link button.
+  await expect(page.getByText('not joined yet')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Copy link for Ali' }).first()).toBeVisible();
   await expect(page.getByRole('button', { name: 'Remove Ali' })).toBeVisible();
 
   // An itemized bill, choosing people in the dropdown by keyboard.
@@ -258,9 +260,9 @@ test('US-36 #1 the whole journey works with only the keyboard', async ({ page, b
   await expect(page.getByText('Everyone is settled up.')).toBeVisible();
 
   // Log out.
-  await tabTo(page, page.getByRole('link', { name: 'Account' }).first(), key);
+  await tabTo(page, page.getByRole('link', { name: 'Settings' }).first(), key);
   await page.keyboard.press('Enter');
-  await headingFocused(page, 'Account');
+  await headingFocused(page, 'Settings');
   await tabTo(page, page.getByRole('button', { name: 'Log out' }), key);
   await page.keyboard.press('Enter');
   await expect(page.getByRole('heading', { name: 'Log in' })).toBeVisible();

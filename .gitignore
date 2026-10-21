@@ -1,5 +1,5 @@
 # ==========================================================
-# .gitignore for the Bill Splitting Calculator
+# .gitignore for Bill Splitter
 # Keeps out generated, local, and secret files.
 # Tracked: src/ (all code, configs and tests), docs/, transcripts/, README.md
 # ==========================================================

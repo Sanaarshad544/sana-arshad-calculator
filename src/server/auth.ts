@@ -5,6 +5,8 @@ import type { Account, Theme } from '../shared/api.js';
 import { transaction, type Pool, type Queryable } from './db.js';
 import { HttpError, badRequest } from './http.js';
 import { clearAttempts, passwordChecks, recordAttempt } from './limits.js';
+import { inviteInfo, redeemInvite } from './people.js';
+import type { InviteResult } from '../shared/api.js';
 
 const SESSION_DAYS = 30;
 const SESSION_MS = SESSION_DAYS * 24 * 60 * 60 * 1000;
@@ -182,18 +184,20 @@ export function authRouter(ctx: AuthContext): Router {
       hashSecret(password.value),
       hashSecret(normalizeRecoveryCode(recoveryCode)),
     ]);
-    // The account and its first session are saved together, or not at all.
-    const token = await transaction(ctx.pool, async (client) => {
+    const inviteCode = req.body?.inviteCode ? String(req.body.inviteCode) : null;
+    // The account, its first session and any invite are saved together, or not at all.
+    const { token, invite } = await transaction(ctx.pool, async (client) => {
       const { rows } = await client.query<{ id: number }>(
         `INSERT INTO accounts (username, username_key, password_hash, recovery_hash)
          VALUES ($1, $2, $3, $4) ON CONFLICT (username_key) DO NOTHING RETURNING id`,
         [username.value, username.value.toLowerCase(), passwordHash, recoveryHash],
       );
       if (!rows[0]) throw new HttpError(409, MESSAGES.usernameTaken, { username: MESSAGES.usernameTaken });
-      return createSession(ctx, client, rows[0].id);
+      const invite: InviteResult | null = inviteCode ? await redeemInvite(client, inviteCode, rows[0].id) : null;
+      return { token: await createSession(ctx, client, rows[0].id), invite };
     });
     setSessionCookie(res, token, ctx.production);
-    res.status(201).json({ account: { username: username.value, theme: 'device' }, recoveryCode });
+    res.status(201).json({ account: { username: username.value, theme: 'device' }, recoveryCode, invite });
   });
 
   router.post('/login', async (req, res) => {
@@ -210,10 +214,30 @@ export function authRouter(ctx: AuthContext): Router {
     const ok = await verifySecret(password, row ? row.password_hash : await getDummyHash());
     if (!row || !ok) throw new HttpError(401, MESSAGES.loginFailed);
     await clearAttempts(ctx.pool, key, ['login']);
+    // Logging in from an invite link links that person's groups too. A problem with
+    // the invite (used, not valid, or for someone else) doesn't undo the login.
+    // Someone already in some of those groups is asked first, on the invite page.
+    const inviteCode = req.body?.inviteCode ? String(req.body.inviteCode) : null;
+    let invite: InviteResult | null = null;
+    let inviteError: string | null = null;
+    let inviteConfirm = false;
+    if (inviteCode) {
+      const info = await inviteInfo(ctx.pool, inviteCode, row.id).catch(() => null);
+      if (info && !info.used && !info.viewerAlreadyIn && info.viewerGroups.length > 0) {
+        inviteConfirm = true;
+      } else {
+        try {
+          invite = await transaction(ctx.pool, (client) => redeemInvite(client, inviteCode, row.id));
+        } catch (error) {
+          if (!(error instanceof HttpError) || error.status >= 500) throw error;
+          inviteError = error.message;
+        }
+      }
+    }
     // Logging in again replaces the session this browser already had.
     if (res.locals.sessionHash) await ctx.pool.query('DELETE FROM sessions WHERE token_hash = $1', [res.locals.sessionHash]);
     setSessionCookie(res, await createSession(ctx, ctx.pool, row.id), ctx.production);
-    res.json({ account: toAccount(row) });
+    res.json({ account: toAccount(row), invite, inviteError, inviteConfirm });
   });
 
   router.post('/logout', async (_req, res) => {

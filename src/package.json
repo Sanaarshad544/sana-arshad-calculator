@@ -1,5 +1,5 @@
 {
-  "name": "bill-splitting-calculator",
+  "name": "bill-splitter",
   "version": "1.0.0",
   "private": true,
   "description": "Split and track bills exactly to the cent, alone or with lasting groups of friends.",

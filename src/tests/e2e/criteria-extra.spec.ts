@@ -53,11 +53,12 @@ test('US-25 #13 the largest bill shows exactly 1,000,000,000.00', async ({ page 
   await page.getByRole('radio', { name: 'Items + tax' }).check();
   await page.getByRole('button', { name: 'Calculate' }).click();
   const results = page.getByRole('region', { name: 'Results' });
-  const line = (label: string) => results.locator('dt', { hasText: new RegExp(`^${label}$`) }).locator('xpath=following-sibling::dd');
-  await expect(line('Subtotal')).toHaveText('$200,000,000.00');
-  await expect(line('Tax')).toHaveText('$200,000,000.00');
-  await expect(line('Other charges')).toHaveText('$200,000,000.00');
-  await expect(line('Tip')).toHaveText('$400,000,000.00');
+  // A % line carries its rate in its label, so each line is found by its full label.
+  const line = (label: RegExp) => results.locator('dt').filter({ hasText: label }).locator('xpath=following-sibling::dd');
+  await expect(line(/^Subtotal$/)).toHaveText('$200,000,000.00');
+  await expect(line(/^Tax \(100%\)$/)).toHaveText('$200,000,000.00');
+  await expect(line(/^Other charges \(100%\)$/)).toHaveText('$200,000,000.00');
+  await expect(line(/^Tip \(100% of items \+ tax\)$/)).toHaveText('$400,000,000.00');
   await expect(page.getByTestId('grand-total')).toHaveText('$1,000,000,000.00');
 });
 

@@ -44,7 +44,7 @@ async function main(): Promise<void> {
   }
 
   app.listen(config.port, () => {
-    console.log(`Bill Splitting Calculator is running at http://localhost:${config.port}`);
+    console.log(`Bill Splitter is running at http://localhost:${config.port}`);
   });
 }
 

@@ -55,11 +55,16 @@ describe('US-01 create an account', () => {
   });
 
   it('#7 bad passwords are refused', async () => {
-    for (const password of ['', 'a'.repeat(7), 'a'.repeat(129)]) {
+    for (const [password, message] of [
+      ['', MESSAGES.passwordShort],
+      ['a'.repeat(7), MESSAGES.passwordShort],
+      ['a'.repeat(129), MESSAGES.passwordLong],
+    ]) {
       const res = await anon().post('/api/auth/signup').send({ username: uniqueName(), password });
       expect(res.status).toBe(400);
-      expect(res.body.error.fields.password).toBe(MESSAGES.password);
+      expect(res.body.error.fields.password).toBe(message);
     }
+    expect(MESSAGES.passwordShort).toBe('Password must be at least 8 characters');
   });
 
   it('#10 never asks for an email or phone', async () => {
@@ -157,10 +162,14 @@ describe('US-03 reset with a recovery code', () => {
 
   it('#4 a bad new password changes nothing', async () => {
     const { username, recoveryCode } = await newUser();
-    for (const newPassword of ['', 'short', 'a'.repeat(129)]) {
+    for (const [newPassword, message] of [
+      ['', MESSAGES.passwordShort],
+      ['short', MESSAGES.passwordShort],
+      ['a'.repeat(129), MESSAGES.passwordLong],
+    ]) {
       const res = await anon().post('/api/auth/reset').send({ username, recoveryCode, newPassword });
       expect(res.status).toBe(400);
-      expect(res.body.error.fields.newPassword).toBe(MESSAGES.password);
+      expect(res.body.error.fields.newPassword).toBe(message);
     }
     expect((await anon().post('/api/auth/login').send({ username, password: PASSWORD })).status).toBe(200);
   });

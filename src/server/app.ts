@@ -2,7 +2,8 @@ import express, { type Express, type RequestHandler } from 'express';
 import { authRouter, loadSession, meRouter, type AuthContext } from './auth.js';
 import { errorHandler } from './http.js';
 import { groupsRouter } from './groups.js';
-import { dashboardRouter, joinRouter } from './join.js';
+import { dashboardRouter } from './dashboard.js';
+import { invitesRouter, peopleRouter } from './invites.js';
 import { soloRouter } from './solo.js';
 
 /**
@@ -29,7 +30,8 @@ export function createApp(ctx: AuthContext): Express {
   api.use('/dashboard', dashboardRouter(ctx.pool));
   api.use('/solo-bills', soloRouter(ctx.pool));
   api.use('/groups', groupsRouter(ctx.pool));
-  api.use('/join', joinRouter(ctx.pool));
+  api.use('/people', peopleRouter(ctx.pool));
+  api.use('/invites', invitesRouter(ctx.pool));
   api.use((_req, res) => {
     res.status(404).json({ error: { message: 'Not found' } });
   });

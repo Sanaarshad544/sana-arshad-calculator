@@ -1,12 +1,29 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { api, makeGroup, signUpFast } from './helpers.js';
 
-test('US-09/US-10/US-11 create a group, add friends, see and copy the invite code', async ({ page, context, browserName }, info) => {
+// Joining works through personal invites: every person added by name has their own code and link (/invite/<code>).
+
+/** A personal invite code is 12 characters and never contains 0, O, 1 or I. */
+const INVITE_CODE = /^[A-HJ-NP-Z2-9]{12}$/;
+
+/** A person's own invite code, as the group's details give it to a member. */
+async function inviteCodeOf(page: Page, groupId: string, name: string): Promise<string> {
+  const { group } = await api<{ group: { members: { name: string; inviteCode: string | null }[] } }>(page, 'get', `/groups/${groupId}`);
+  const code = group.members.find((m) => m.name === name)?.inviteCode;
+  if (!code) throw new Error(`"${name}" has no invite code`);
+  return code;
+}
+
+/** One person's row on the Members tab (not the "was added" box). Every row has a "Rename" button. */
+const memberRow = (page: Page, name: string) =>
+  page.getByRole('listitem').filter({ has: page.getByRole('button', { name: `Rename ${name}`, exact: true }) });
+
+test("US-09/US-10/US-11 create a group, add friends, see and copy each person's own invite", async ({ page, context, browserName }, info) => {
   await signUpFast(page, info);
   await page.getByRole('link', { name: 'Groups' }).first().click();
   await expect(page.getByText('No groups yet. Create one to start splitting with friends.')).toBeVisible();
   await page.getByRole('link', { name: 'Create group' }).first().click();
-  await expect(page.getByText("It can't be changed after the group is created.")).toBeVisible();
+  await expect(page.getByText("You can change it later; amounts aren't converted.")).toBeVisible();
   await page.getByLabel('Group name').fill('Trip');
   await page.getByLabel('Currency', { exact: true }).selectOption('€');
   await page.getByRole('button', { name: 'Create group' }).click();
@@ -16,17 +33,23 @@ test('US-09/US-10/US-11 create a group, add friends, see and copy the invite cod
   await page.getByLabel('Add a friend by name').fill('Omar');
   await page.getByRole('button', { name: 'Add member' }).click();
   await expect(page.getByRole('status').getByText('Member added')).toBeVisible();
+  // Right after adding, a box offers Omar's own invite link.
+  const box = page.getByRole('region', { name: 'Invite Omar' });
+  await expect(box).toContainText('Omar was added. Send them their own invite link');
   await page.getByLabel('Add a friend by name').fill('OMAR');
   await page.getByRole('button', { name: 'Add member' }).click();
   await expect(page.getByText('That name has already been used in this group')).toBeVisible();
 
-  const code = (await page.getByTestId('invite-code').textContent())?.trim() ?? '';
-  expect(code).toMatch(/^[A-Z2-9]{8}$/);
+  const row = memberRow(page, 'Omar');
+  const code = (await row.getByTestId('invite-code-Omar').textContent())?.trim() ?? '';
+  expect(code).toMatch(INVITE_CODE);
+  await expect(box.getByTestId('invite-code-Omar')).toHaveText(code);
   if (browserName === 'chromium') await context.grantPermissions(['clipboard-read', 'clipboard-write']);
-  await page.getByRole('button', { name: 'Copy' }).click();
+  await row.getByRole('button', { name: 'Copy link for Omar' }).click();
+  await expect(row.getByRole('button', { name: 'Copied for Omar' })).toBeVisible();
+  // Only Chromium lets a test read the clipboard back.
   if (browserName === 'chromium') {
-    await expect(page.getByRole('button', { name: 'Copied' })).toBeVisible();
-    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(code);
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`${new URL(page.url()).origin}/invite/${code}`);
   }
   await expect(page.getByRole('button', { name: /regenerate/i })).toHaveCount(0);
 });
@@ -185,34 +208,91 @@ test('US-20/US-23/US-22 remove, restore, and close out a group', async ({ page }
   await expect(page.getByRole('alert')).toHaveText('This group no longer exists');
 });
 
-test('US-12/US-24 join by claiming a name, then rejoin after removal', async ({ browser }, info) => {
+test('US-12/US-20/US-23 join with a personal invite, then come back only through Restore', async ({ browser }, info) => {
   const ownerCtx = await browser.newContext();
   const owner = await ownerCtx.newPage();
   await signUpFast(owner, info, 'own');
   const { groupId, ids } = await makeGroup(owner, 'Joiners', '$', ['Omar']);
-  const { group } = await api<{ group: { inviteCode: string } }>(owner, 'get', `/groups/${groupId}`);
+  const code = await inviteCodeOf(owner, groupId, 'Omar');
 
   const omarCtx = await browser.newContext();
   const omar = await omarCtx.newPage();
   await signUpFast(omar, info, 'omar');
-  await omar.goto('/join');
-  await omar.getByLabel('Invite code').fill('WRONGCODE');
-  await omar.getByRole('button', { name: 'Continue' }).click();
-  await expect(omar.getByRole('alert')).toHaveText("That invite code isn't valid");
-  await omar.getByLabel('Invite code').fill(group.inviteCode.toLowerCase());
-  await omar.getByRole('button', { name: 'Continue' }).click();
-  await omar.getByText("I'm Omar").click();
-  await omar.getByRole('button', { name: 'Join group' }).click();
-  await expect(omar.getByRole('heading', { level: 1, name: 'Joiners' })).toBeVisible();
+  try {
+    // A wrong code shows a clear message; going back, the right one (typed in lower case) shows Omar's invite.
+    await omar.goto('/join');
+    await expect(omar.getByRole('heading', { level: 1, name: 'Use an invite code' })).toBeVisible();
+    await omar.getByLabel('Invite code').fill('WRONGCODE');
+    await omar.getByRole('button', { name: 'Continue' }).click();
+    await expect(omar.getByRole('heading', { level: 1, name: 'Invite not found' })).toBeVisible();
+    await expect(omar.getByRole('alert')).toHaveText("That invite link isn't valid. Check the code and try again.");
+    await omar.goBack();
+    await expect(omar.getByRole('heading', { level: 1, name: 'Use an invite code' })).toBeVisible();
+    await omar.getByLabel('Invite code').fill(code.toLowerCase());
+    await omar.getByRole('button', { name: 'Continue' }).click();
+    await expect(omar.getByRole('heading', { level: 1, name: "Omar, join your friends' groups" })).toBeVisible();
+    await omar.getByRole('button', { name: 'Join these groups' }).click();
+    await expect(omar.getByRole('heading', { level: 1, name: 'Dashboard' })).toBeVisible();
+    await expect(omar.getByRole('status').getByText('You joined 1 group')).toBeVisible();
+    await omar.goto(`/groups/${groupId}`);
+    await expect(omar.getByRole('heading', { level: 1, name: 'Joiners' })).toBeVisible();
 
-  await api(owner, 'post', `/groups/${groupId}/members/${ids.Omar}/remove`);
-  await omar.reload();
-  await expect(omar.getByRole('alert')).toHaveText('You no longer have access to this group');
+    // Once removed, the used invite does not bring him back.
+    await api(owner, 'post', `/groups/${groupId}/members/${ids.Omar}/remove`);
+    await omar.reload();
+    await expect(omar.getByRole('alert')).toHaveText('You no longer have access to this group');
+    await omar.goto(`/invite/${code}`);
+    await expect(omar.getByRole('alert')).toHaveText('This invite has already been used');
+    await omar.goto(`/groups/${groupId}`);
+    await expect(omar.getByRole('alert')).toHaveText('You no longer have access to this group');
 
-  await omar.goto('/join');
-  await omar.getByLabel('Invite code').fill(group.inviteCode);
-  await omar.getByRole('button', { name: 'Continue' }).click();
-  await expect(omar.getByRole('heading', { level: 1, name: 'Joiners' })).toBeVisible();
-  await ownerCtx.close();
-  await omarCtx.close();
+    // Restore does.
+    await api(owner, 'post', `/groups/${groupId}/members/${ids.Omar}/restore`);
+    await omar.reload();
+    await expect(omar.getByRole('heading', { level: 1, name: 'Joiners' })).toBeVisible();
+  } finally {
+    await ownerCtx.close();
+    await omarCtx.close();
+  }
+});
+
+test('US-20/US-23 leaving a group asks "Leave this group?" with "Any member can restore you later."; a restore brings you back', async ({ browser }, info) => {
+  const ownerCtx = await browser.newContext();
+  const owner = await ownerCtx.newPage();
+  await signUpFast(owner, info, 'own');
+  const { groupId } = await makeGroup(owner, 'Leavers', '$', ['Omar']);
+  const omarCtx = await browser.newContext();
+  const omar = await omarCtx.newPage();
+  await signUpFast(omar, info, 'omar');
+  try {
+    await api(omar, 'post', `/invites/${await inviteCodeOf(owner, groupId, 'Omar')}/accept`);
+
+    await omar.goto(`/groups/${groupId}?tab=members`);
+    await expect(omar.getByRole('heading', { level: 1, name: 'Leavers' })).toBeVisible();
+    await omar.getByRole('button', { name: 'Leave group' }).click();
+    const dialog = omar.getByRole('dialog', { name: 'Leave this group?' });
+    await expect(dialog).toContainText('Any member can restore you later.');
+    // "Stay" keeps him in.
+    await dialog.getByRole('button', { name: 'Stay' }).click();
+    await expect(dialog).toBeHidden();
+    await expect(omar.getByRole('heading', { level: 1, name: 'Leavers' })).toBeVisible();
+
+    await omar.getByRole('button', { name: 'Leave group' }).click();
+    await dialog.getByRole('button', { name: 'Leave group' }).click();
+    await expect(omar.getByRole('status').getByText('You left the group')).toBeVisible();
+    await expect(omar.getByRole('heading', { level: 1, name: 'Groups', exact: true })).toBeVisible();
+    await omar.goto(`/groups/${groupId}`);
+    await expect(omar.getByRole('alert')).toHaveText('You no longer have access to this group');
+
+    // Any member can restore him; the used invite cannot.
+    await owner.goto(`/groups/${groupId}?tab=members`);
+    await expect(owner.getByText('Omar (removed)')).toBeVisible();
+    await owner.getByRole('button', { name: 'Restore Omar' }).click();
+    await expect(owner.getByRole('status').getByText('Member restored')).toBeVisible();
+    await omar.reload();
+    await expect(omar.getByRole('heading', { level: 1, name: 'Leavers' })).toBeVisible();
+  } finally {
+    await ownerCtx.close();
+    await omarCtx.close();
+  }
 });

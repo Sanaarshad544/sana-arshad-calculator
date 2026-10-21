@@ -1,5 +1,5 @@
 import { forwardRef } from 'react';
-import type { CalcResult } from '../billEditor.js';
+import type { CalcResult, RateLabels } from '../billEditor.js';
 import { money } from './ui.js';
 
 interface Props {
@@ -8,10 +8,12 @@ interface Props {
   /** Group bills: names by member id, and who paid. */
   names?: Map<string, string>;
   payerId?: string | null;
+  /** The rate behind tax, other charges and tip, e.g. "(5%)". */
+  rates?: RateLabels;
 }
 
 /** Results below the form. Until Calculate is pressed: "Press Calculate to see results". */
-export const Results = forwardRef<HTMLElement, Props>(function Results({ result, currency, names, payerId }, ref) {
+export const Results = forwardRef<HTMLElement, Props>(function Results({ result, currency, names, payerId, rates }, ref) {
   const m = (cents: number) => money(cents, currency);
   return (
     <div className="receipt-wrap">
@@ -32,15 +34,21 @@ export const Results = forwardRef<HTMLElement, Props>(function Results({ result,
               <dd>{m(result.totals.itemsCents)}</dd>
             </div>
             <div>
-              <dt>Tax</dt>
+              <dt>
+                Tax{rates?.tax && <span className="rate"> {rates.tax}</span>}
+              </dt>
               <dd>{m(result.totals.taxCents)}</dd>
             </div>
             <div>
-              <dt>Other charges</dt>
+              <dt>
+                Other charges{rates?.other && <span className="rate"> {rates.other}</span>}
+              </dt>
               <dd>{m(result.totals.otherCents)}</dd>
             </div>
             <div>
-              <dt>Tip</dt>
+              <dt>
+                Tip{rates?.tip && <span className="rate"> {rates.tip}</span>}
+              </dt>
               <dd>{m(result.totals.tipCents)}</dd>
             </div>
             <div className="totals-grand">

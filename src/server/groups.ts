@@ -1,4 +1,3 @@
-import { randomInt } from 'node:crypto';
 import { Router, type Response } from 'express';
 import { checkGroupBill, computeGroupBill, type GroupBill, type GroupBillInput } from '../shared/bill.js';
 import { suggestPayments } from '../shared/balances.js';
@@ -28,6 +27,8 @@ import { transaction, type Client, type Pool, type Queryable } from './db.js';
 import { HttpError, badRequest, fieldError } from './http.js';
 import { chargeValues, dateString, rowToInput, rowTotals, today, totalsValues, type ChargeColumns, type TotalsColumns } from './billRows.js';
 import { parseId } from './solo.js';
+import { logActivity } from './activity.js';
+import { myPeople, renewInviteBeforeAdd, renewInvitesIn, visibleInvites } from './people.js';
 
 // ---------- Rows and helpers ----------
 
@@ -35,13 +36,13 @@ export interface GroupRow {
   id: number;
   name: string;
   currency: string;
-  invite_code: string;
 }
 
 export interface MemberRow {
   id: number;
   name: string;
   account_id: number | null;
+  person_id: number | null;
   status: 'current' | 'removed';
 }
 
@@ -61,23 +62,9 @@ interface SettleRow {
   created_at: Date;
 }
 
-const INVITE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-
-export function newInviteCode(): string {
-  return Array.from({ length: 8 }, () => INVITE_ALPHABET[randomInt(INVITE_ALPHABET.length)]).join('');
-}
-
-export function normalizeInviteCode(code: unknown): string {
-  return String(code ?? '').toUpperCase().replace(/[\s-]/g, '');
-}
-
-export async function logActivity(db: Queryable, groupId: number, actorName: string, message: string): Promise<void> {
-  await db.query('INSERT INTO activity (group_id, actor_name, message) VALUES ($1, $2, $3)', [groupId, actorName, message]);
-}
-
 export async function loadMembers(db: Queryable, groupId: number): Promise<MemberRow[]> {
   const { rows } = await db.query<MemberRow>(
-    'SELECT id, name, account_id, status FROM members WHERE group_id = $1 ORDER BY id',
+    'SELECT id, name, account_id, person_id, status FROM members WHERE group_id = $1 ORDER BY id',
     [groupId],
   );
   return rows;
@@ -116,13 +103,13 @@ export interface Membership {
  */
 export async function loadMembership(db: Queryable, groupId: number, accountId: number, lock = false): Promise<Membership> {
   const { rows } = await db.query<GroupRow>(
-    `SELECT id, name, currency, invite_code FROM groups WHERE id = $1${lock ? ' FOR UPDATE' : ''}`,
+    `SELECT id, name, currency FROM groups WHERE id = $1${lock ? ' FOR UPDATE' : ''}`,
     [groupId],
   );
   const group = rows[0];
   if (!group) throw new HttpError(404, MESSAGES.groupGone, undefined, 'GROUP_GONE');
   const me = await db.query<MemberRow>(
-    'SELECT id, name, account_id, status FROM members WHERE group_id = $1 AND account_id = $2',
+    'SELECT id, name, account_id, person_id, status FROM members WHERE group_id = $1 AND account_id = $2',
     [groupId, accountId],
   );
   if (!me.rows[0]) throw new HttpError(403, MESSAGES.noAccess, undefined, 'NO_ACCESS');
@@ -163,9 +150,31 @@ function removedAmong(members: MemberRow[], ids: number[]): MemberRow | undefine
 
 // ---------- Group detail ----------
 
-export async function buildGroupDetail(db: Queryable, m: Membership): Promise<GroupDetail> {
-  const members = await loadMembers(db, m.group.id);
-  const balances = await loadBalances(db, m.group.id);
+export async function buildGroupDetail(pool: Pool, m: Membership): Promise<GroupDetail> {
+  const members = await loadMembers(pool, m.group.id);
+  const balances = await loadBalances(pool, m.group.id);
+  // Current members who haven't joined each have their own invite. I see a code
+  // only when I'm in every group that person is in.
+  const waiting = members.filter((row) => row.status === 'current' && row.account_id === null && row.person_id !== null);
+  const invites = await visibleInvites(pool, m.me.account_id as number, waiting.map((row) => row.person_id as number));
+  // A person who already joined, but whose entry here was skipped because their account was already in this group.
+  const joined = await pool.query<{ id: number; account_id: number }>(
+    'SELECT id, account_id FROM persons WHERE id = ANY($1::bigint[]) AND account_id IS NOT NULL',
+    [waiting.map((row) => row.person_id as number)],
+  );
+  const joinedAccount = new Map(joined.rows.map((r) => [r.id, r.account_id]));
+  const inviteOf = (row: MemberRow): Pick<MemberDto, 'inviteCode' | 'inviteNote' | 'alsoHereAs'> => {
+    const none = { inviteCode: null, inviteNote: null, alsoHereAs: null };
+    if (!waiting.includes(row)) return none;
+    const personId = row.person_id as number;
+    const account = joinedAccount.get(personId);
+    if (account !== undefined) {
+      return { ...none, alsoHereAs: members.find((x) => x.account_id === account)?.name ?? null, inviteNote: 'joined' };
+    }
+    const code = invites.get(personId);
+    if (code === undefined) return none;
+    return code ? { ...none, inviteCode: code } : { ...none, inviteNote: 'elsewhere' };
+  };
   const dto: MemberDto[] = members
     .map((row) => ({
       id: String(row.id),
@@ -174,6 +183,7 @@ export async function buildGroupDetail(db: Queryable, m: Membership): Promise<Gr
       hasAccount: row.account_id !== null,
       isMe: row.id === m.me.id,
       balanceCents: balances.get(row.id) ?? 0,
+      ...inviteOf(row),
     }))
     .sort((a, b) => (a.status === b.status ? 0 : a.status === 'current' ? -1 : 1));
   const current = dto.filter((d) => d.status === 'current');
@@ -182,7 +192,6 @@ export async function buildGroupDetail(db: Queryable, m: Membership): Promise<Gr
     id: String(m.group.id),
     name: m.group.name,
     currency: m.group.currency,
-    inviteCode: m.group.invite_code,
     meId: String(m.me.id),
     members: dto,
     suggestions: suggestPayments(current.map((d) => ({ memberId: d.id, cents: d.balanceCents }))),
@@ -325,14 +334,11 @@ export function groupsRouter(pool: Pool): Router {
     if (!name.ok || !currency.ok) throw fieldError(fields);
 
     const groupId = await transaction(pool, async (client) => {
-      let id: number | undefined;
-      while (id === undefined) {
-        const { rows } = await client.query<{ id: number }>(
-          'INSERT INTO groups (name, currency, invite_code) VALUES ($1, $2, $3) ON CONFLICT (invite_code) DO NOTHING RETURNING id',
-          [name.value, currency.value, newInviteCode()],
-        );
-        id = rows[0]?.id;
-      }
+      const { rows } = await client.query<{ id: number }>('INSERT INTO groups (name, currency) VALUES ($1, $2) RETURNING id', [
+        name.value,
+        currency.value,
+      ]);
+      const id = rows[0].id;
       // The creator joins under their username.
       await client.query(
         'INSERT INTO members (group_id, name, name_key, account_id) VALUES ($1, $2, $3, $4)',
@@ -349,21 +355,105 @@ export function groupsRouter(pool: Pool): Router {
     res.json({ group: await buildGroupDetail(pool, m) });
   });
 
+  // Rename the group or change its currency. Changing the currency only
+  // relabels amounts; nothing is converted.
+  router.put('/:id', async (req, res) => {
+    const name = checkGroupName(String(req.body?.name ?? ''));
+    const currency = checkCurrency(String(req.body?.currency ?? ''));
+    const fields: Record<string, string> = {};
+    if (!name.ok) fields.name = name.message;
+    if (!currency.ok) fields.currency = currency.message;
+    if (!name.ok || !currency.ok) throw fieldError(fields);
+    await withGroup(pool, res, req.params.id, async (client, m) => {
+      await client.query('UPDATE groups SET name = $2, currency = $3 WHERE id = $1', [m.group.id, name.value, currency.value]);
+      if (name.value !== m.group.name) {
+        await logActivity(client, m.group.id, m.me.name, `${m.me.name} renamed the group from '${m.group.name}' to '${name.value}'`);
+      }
+      if (currency.value !== m.group.currency) {
+        await logActivity(client, m.group.id, m.me.name, `${m.me.name} changed the currency from ${m.group.currency} to ${currency.value}`);
+      }
+    });
+    res.json({ ok: true });
+  });
+
   // ----- Members -----
 
+  // Add someone: a new name, or someone from my other groups ("p:<person>" / "a:<account>").
   router.post('/:id/members', async (req, res) => {
-    const name = checkMemberName(String(req.body?.name ?? ''));
-    if (!name.ok) throw fieldError({ name: name.message });
-    await withGroup(pool, res, req.params.id, async (client, m) => {
+    const account = currentAccount(res);
+    const personKey = req.body?.personKey == null ? null : String(req.body.personKey);
+    const typed = String(req.body?.name ?? '');
+    const added = await withGroup(pool, res, req.params.id, async (client, m) => {
       if ((await countCurrent(client, m.group.id)) >= MAX_GROUP_MEMBERS) throw badRequest(MESSAGES.groupFull, { name: MESSAGES.groupFull });
-      const { rows } = await client.query(
-        'INSERT INTO members (group_id, name, name_key) VALUES ($1, $2, $3) ON CONFLICT (group_id, name_key) DO NOTHING RETURNING id',
-        [m.group.id, name.value, nameKey(name.value)],
+      let personId: number | null = null;
+      let accountId: number | null = null;
+      let defaultName = typed;
+      if (personKey) {
+        const option = (await myPeople(client, account.id, m.group.id)).find((p) => p.key === personKey);
+        if (!option) throw fieldError({ person: MESSAGES.notYourPerson });
+        defaultName = option.name;
+        if (personKey.startsWith('a:')) {
+          accountId = Number(personKey.slice(2));
+        } else {
+          personId = Number(personKey.slice(2));
+          // Locked, so an invite being used at this moment finishes first.
+          const linked = await client.query<{ account_id: number | null }>('SELECT account_id FROM persons WHERE id = $1 FOR UPDATE', [
+            personId,
+          ]);
+          accountId = linked.rows[0]?.account_id ?? null;
+        }
+      }
+      const name = checkMemberName(typed.trim() ? typed : defaultName);
+      if (!name.ok) throw fieldError({ name: name.message });
+      if (accountId !== null) {
+        const already = await client.query('SELECT 1 FROM members WHERE group_id = $1 AND account_id = $2', [m.group.id, accountId]);
+        if (already.rows[0]) throw new HttpError(409, MESSAGES.alreadyMember, { person: MESSAGES.alreadyMember });
+      }
+      // Must run before the new entry exists: it compares the person's current groups with this one.
+      const inviteChanged = personKey !== null && personId !== null && accountId === null && (await renewInviteBeforeAdd(client, personId, m.group.id));
+      if (!personKey) {
+        const created = await client.query<{ id: number }>('INSERT INTO persons (name, created_by) VALUES ($1, $2) RETURNING id', [
+          name.value,
+          account.id,
+        ]);
+        personId = created.rows[0].id;
+      }
+      const { rows } = await client.query<{ id: number }>(
+        `INSERT INTO members (group_id, name, name_key, account_id, person_id) VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (group_id, name_key) DO NOTHING RETURNING id`,
+        [m.group.id, name.value, nameKey(name.value), accountId, personId],
       );
       if (!rows[0]) throw new HttpError(409, MESSAGES.nameUsed, { name: MESSAGES.nameUsed });
       await logActivity(client, m.group.id, m.me.name, `${m.me.name} added ${name.value}`);
+      return { memberId: rows[0].id, inviteChanged };
     });
-    res.status(201).json({ ok: true });
+    res.status(201).json({ memberId: String(added.memberId), inviteChanged: added.inviteChanged });
+  });
+
+  // Rename a member. The old name becomes free for someone else.
+  router.put('/:id/members/:memberId', async (req, res) => {
+    const memberId = parseId(req.params.memberId);
+    const name = checkMemberName(String(req.body?.name ?? ''));
+    if (!name.ok) throw fieldError({ name: name.message });
+    await withGroup(pool, res, req.params.id, async (client, m) => {
+      const target = (await loadMembers(client, m.group.id)).find((x) => x.id === memberId);
+      if (!target) throw new HttpError(404, 'That member could not be found');
+      if (target.name === name.value) return;
+      const clash = await client.query('SELECT 1 FROM members WHERE group_id = $1 AND name_key = $2 AND id <> $3', [
+        m.group.id,
+        nameKey(name.value),
+        memberId,
+      ]);
+      if (clash.rows[0]) throw new HttpError(409, MESSAGES.nameUsed, { name: MESSAGES.nameUsed });
+      await client.query('UPDATE members SET name = $2, name_key = $3 WHERE id = $1', [memberId, name.value, nameKey(name.value)]);
+      // Someone who hasn't joined keeps their latest name on their invite.
+      if (target.account_id === null && target.person_id !== null) {
+        await client.query('UPDATE persons SET name = $2 WHERE id = $1 AND account_id IS NULL', [target.person_id, name.value]);
+      }
+      const actor = target.id === m.me.id ? name.value : m.me.name;
+      await logActivity(client, m.group.id, actor, `${actor} renamed ${target.name} to ${name.value}`);
+    });
+    res.json({ ok: true });
   });
 
   router.post('/:id/members/:memberId/remove', async (req, res) => {
@@ -376,6 +466,8 @@ export function groupsRouter(pool: Pool): Router {
       const balance = (await loadBalances(client, m.group.id)).get(target.id) ?? 0;
       if (balance !== 0) throw badRequest(MESSAGES.settleBeforeRemove);
       await client.query("UPDATE members SET status = 'removed' WHERE id = $1", [target.id]);
+      // They may have seen invites here; new codes stop them using one to get back in.
+      if (target.account_id !== null) await renewInvitesIn(client, m.group.id);
       await logActivity(client, m.group.id, m.me.name, `${m.me.name} removed ${target.name}`);
     });
     res.json({ ok: true });
@@ -412,6 +504,7 @@ export function groupsRouter(pool: Pool): Router {
       const balance = (await loadBalances(client, m.group.id)).get(m.me.id) ?? 0;
       if (balance !== 0) throw badRequest(MESSAGES.settleBeforeLeave);
       await client.query("UPDATE members SET status = 'removed' WHERE id = $1", [m.me.id]);
+      await renewInvitesIn(client, m.group.id);
       await logActivity(client, m.group.id, m.me.name, `${m.me.name} left`);
       return 'left' as const;
     });
@@ -615,7 +708,7 @@ async function loadSettleUp(db: Queryable, groupId: number, id: number): Promise
 /** My current groups, each with my own balance. */
 export async function listMyGroups(db: Queryable, accountId: number): Promise<GroupSummary[]> {
   const { rows } = await db.query<GroupRow & { member_id: number }>(
-    `SELECT g.id, g.name, g.currency, g.invite_code, m.id AS member_id
+    `SELECT g.id, g.name, g.currency, m.id AS member_id
        FROM members m JOIN groups g ON g.id = m.group_id
       WHERE m.account_id = $1 AND m.status = 'current'
       ORDER BY g.name, g.id`,

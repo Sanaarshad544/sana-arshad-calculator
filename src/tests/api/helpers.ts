@@ -90,3 +90,19 @@ export async function balances(agent: Agent, groupId: string): Promise<Record<st
       .map((m: { name: string; balanceCents: number }) => [m.name, m.balanceCents]),
   );
 }
+
+/** A name-only member's personal invite code, as the group page shows it. */
+export async function inviteCodeOf(agent: Agent, groupId: string, memberName: string): Promise<string> {
+  const detail = await agent.get(`/api/groups/${groupId}`);
+  const member = detail.body.group.members.find((m: { name: string }) => m.name === memberName);
+  if (!member?.inviteCode) throw new Error(`${memberName} has no invite code`);
+  return member.inviteCode;
+}
+
+/** `joiner` uses the invite that `owner` sees for `memberName` in `groupId`. */
+export async function joinWithInvite(owner: Agent, groupId: string, memberName: string, joiner: Agent) {
+  const code = await inviteCodeOf(owner, groupId, memberName);
+  const res = await joiner.post(`/api/invites/${code}/accept`).send({});
+  if (res.status !== 200) throw new Error(`invite failed: ${res.status} ${JSON.stringify(res.body)}`);
+  return { code, result: res.body.result as { joined: string[]; removed: string[]; alreadyIn: string[] } };
+}

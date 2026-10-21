@@ -1,10 +1,10 @@
 import { Link } from 'react-router-dom';
-import type { CurrencyTotal, DashboardDto } from '../../shared/api.js';
+import type { CurrencyTotal, DashboardDto, MyDebt } from '../../shared/api.js';
 import { api } from '../api.js';
 import { useLoad } from '../hooks.js';
 import { Alert, Balance, EmptyState, PageHeader, Skeleton, money, niceDate, usePageTitle } from '../components/ui.js';
 
-function TotalsCard({ title, totals, tone, none }: { title: string; totals: CurrencyTotal[]; tone: 'owes' | 'owed'; none: string }) {
+function TotalsCard({ title, totals, tone, none, debts }: { title: string; totals: CurrencyTotal[]; tone: 'owes' | 'owed'; none: string; debts: MyDebt[] }) {
   return (
     <section className="card summary-card" aria-labelledby={`sum-${tone}`}>
       <h2 id={`sum-${tone}`} className="section-title">
@@ -18,6 +18,21 @@ function TotalsCard({ title, totals, tone, none }: { title: string; totals: Curr
             <li key={t.currency} className={tone === 'owes' ? 'amount-owes' : 'amount-owed'}>
               {tone === 'owes' ? '−' : '+'}
               {money(t.cents, t.currency)}
+            </li>
+          ))}
+        </ul>
+      )}
+      {debts.length > 0 && (
+        <ul className="debt-list" aria-label={tone === 'owes' ? 'Who you owe' : "Who owes you"}>
+          {debts.map((d) => (
+            <li key={`${d.groupId}-${d.otherName}`} className="debt-row">
+              <span>
+                {tone === 'owes' ? `To ${d.otherName}` : `From ${d.otherName}`}
+                <Link className="muted small debt-group" to={`/groups/${d.groupId}`}>
+                  {d.groupName}
+                </Link>
+              </span>
+              <span className={tone === 'owes' ? 'amount-owes' : 'amount-owed'}>{money(d.cents, d.currency)}</span>
             </li>
           ))}
         </ul>
@@ -48,8 +63,14 @@ export function DashboardPage() {
             <p className="callout">You owe nothing and are owed nothing.</p>
           )}
           <div className="grid-2">
-            <TotalsCard title="You owe" totals={data.owe} tone="owes" none="You owe nothing." />
-            <TotalsCard title="You're owed" totals={data.owed} tone="owed" none="You're owed nothing." />
+            <TotalsCard title="You owe" totals={data.owe} tone="owes" none="You owe nothing." debts={data.debts.filter((d) => d.direction === 'owe')} />
+            <TotalsCard
+              title="You're owed"
+              totals={data.owed}
+              tone="owed"
+              none="You're owed nothing."
+              debts={data.debts.filter((d) => d.direction === 'owed')}
+            />
           </div>
 
           <section className="card" aria-labelledby="dash-groups">

@@ -1,11 +1,11 @@
-# Bill Splitting Calculator
+# Bill Splitter
 
 ## What It Is
 
 A web app for splitting and tracking bills, exact to the cent.
 
 - **Solo bills:** enter your items, tax, any other charges (such as a service, delivery or table fee) and tip, press **Calculate**, and see exactly what you owe. Save bills to a private history, then reopen, edit or delete them.
-- **Groups:** keep lasting groups of friends. Any member can record a bill, say who paid and who took part, and split it equally or by what each person had (shared items included). The app keeps running balances, suggests the fewest payments to settle up, and records repayments. Every change is listed in the group's activity log.
+- **Groups:** keep lasting groups of friends. Each friend you add by name gets their own invite link; using it links every group they're in to their account at once. Any member can record a bill, say who paid and who took part, and split it equally or by what each person had (shared items included). The app keeps running balances, suggests the fewest payments to settle up, and records repayments. Every change is listed in the group's activity log.
 - **Accounts:** a username and password, with a one-time recovery code for resetting a forgotten password. No email address or phone number is needed.
 - **Exact money:** all maths uses whole cents, and every invalid entry gets a clear message instead of a wrong result.
 

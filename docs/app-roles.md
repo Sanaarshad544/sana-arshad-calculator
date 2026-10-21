@@ -1,6 +1,6 @@
 # App Roles
 
-Who uses the Bill Splitting Calculator. Each role is a different kind of person with different needs. Jobs are in [jobs-to-be-done.md](jobs-to-be-done.md), and stories are in [user-stories.md](user-stories.md).
+Who uses Bill Splitter. Each role is a different kind of person with different needs. Jobs are in [jobs-to-be-done.md](jobs-to-be-done.md), and stories are in [user-stories.md](user-stories.md).
 
 ## Solo diner
 
@@ -23,10 +23,12 @@ A **Group member** belongs to one or more lasting groups of friends who share co
 
 They can:
 - create a group with a name and a currency, and add friends to it by name, even friends who never create an account
-- view the group's invite code and copy it, and use an invite code to join a group by claiming their name, or to rejoin a group they were removed from
+- see, copy and share the personal invite of each friend who hasn't joined yet (when they're in every group that friend is in), and use their own invite to link every group they were added to, all at once
 - record a group bill: choose who took part, who paid (one of the people who took part) and whether to split it equally or by items, with shared items split between the people who had them
 - see every member's running balance and the suggested payments to settle up, and record settle-ups (repayments) of any valid amount
 - add, edit or delete any group bill or settle-up, and see every change in the group's activity log
+- rename the group, change its currency (a relabel, not a conversion), and rename members
+- add a friend from their other groups, so that one person and one invite cover all their groups
 - remove a member whose balance is 0.00, leave the group when their own balance is 0.00, and restore removed members
 - as the last member with an account, leave after a warning, which permanently deletes the group
 
@@ -35,8 +37,8 @@ They must never:
 - remove another member, or leave themselves, while that member's balance isn't 0.00. The one exception is the last member with an account leaving, which deletes the group after a warning.
 - record a bill whose payer isn't one of the people who took part in it
 - edit or delete a bill or settle-up that includes a removed member, until that member is restored
-- change the group's currency after the group is created
-- create a brand-new member by entering an invite code; only current members add new names
+- join a group without being added to it by a current member: an invite only links places that friends already made for that person
+- use a friend's invite to get into a group they aren't in: an invite is shown only to members who are already in all of that friend's groups, and it changes as soon as someone who could see it leaves or is removed
 
 ## Host
 

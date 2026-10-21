@@ -1,8 +1,9 @@
 import { useState, type FormEvent } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import type { GroupSummary, JoinResult } from '../../shared/api.js';
-import { checkCurrency, checkGroupName } from '../../shared/rules.js';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import type { GroupDetail, GroupSummary } from '../../shared/api.js';
+import { CURRENCIES, checkCurrency, checkGroupName, normalizeInviteCode } from '../../shared/rules.js';
 import { ApiError, api } from '../api.js';
+import { withoutKey } from '../fieldErrors.js';
 import { useBusy, useLoad } from '../hooks.js';
 import { CurrencyPicker } from '../components/CurrencyPicker.js';
 import { useToast } from '../components/Toasts.js';
@@ -15,7 +16,7 @@ export function GroupsPage() {
     <>
       <PageHeader title="Groups">
         <Link className="btn btn-secondary" to="/join">
-          Join with a code
+          Use an invite code
         </Link>
         <Link className="btn btn-primary" to="/groups/new">
           Create group
@@ -86,18 +87,29 @@ export function NewGroupPage() {
       <PageHeader title="Create group" back={{ to: '/groups', label: 'Groups' }} />
       <form className="card stack narrow" onSubmit={submit} noValidate>
         <Alert>{error}</Alert>
-        <TextField label="Group name" hint="1–50 characters" value={name} onChange={setName} error={errors.name} maxLength={200} />
+        <TextField
+          label="Group name"
+          hint="1–50 characters"
+          value={name}
+          onChange={(v) => {
+            setName(v);
+            setErrors((e) => withoutKey(e, 'name'));
+          }}
+          error={errors.name}
+          maxLength={200}
+        />
         <CurrencyPicker
           choice={choice}
           custom={custom}
           onChange={(c, cu) => {
             setChoice(c);
             setCustom(cu);
+            setErrors((e) => withoutKey(e, 'currency'));
           }}
           error={errors.currency}
-          note="Every bill in this group uses this currency. It can't be changed after the group is created."
+          note="Every bill in this group uses this currency. You can change it later; amounts aren't converted."
         />
-        <p className="muted">You'll join the group under your username. Add friends by name once it's created.</p>
+        <p className="muted">You'll join the group under your username. Once it's created, add friends by name and send each their own invite link.</p>
         <div className="form-actions">
           <button type="submit" className="btn btn-primary" disabled={busy}>
             {busy ? 'Saving…' : 'Create group'}
@@ -108,101 +120,48 @@ export function NewGroupPage() {
   );
 }
 
+/** For someone who was sent a code rather than a link: type it (or paste the link), then see the invite. */
 export function JoinPage() {
-  usePageTitle('Join a group');
+  usePageTitle('Use an invite code');
   const navigate = useNavigate();
-  const toast = useToast();
   const [code, setCode] = useState('');
   const [error, setError] = useState('');
-  const [choose, setChoose] = useState<Extract<JoinResult, { status: 'choose' }> | null>(null);
-  const [memberId, setMemberId] = useState('');
-  const { busy, run } = useBusy();
-
-  const lookUp = (e: FormEvent) => {
+  const submit = (e: FormEvent) => {
     e.preventDefault();
-    void run(async () => {
-      setError('');
-      setChoose(null);
-      try {
-        const r = await api.post<JoinResult>('/join', { code });
-        if (r.status === 'rejoined') {
-          toast('Welcome back');
-          navigate(`/groups/${r.groupId}`);
-        } else {
-          setChoose(r);
-          setMemberId('');
-        }
-      } catch (err) {
-        setError((err as ApiError).message);
-      }
-    });
-  };
-
-  const claim = (e: FormEvent) => {
-    e.preventDefault();
-    if (!memberId) {
-      setError('Choose your name from the list');
+    const fromLink = /\/invite\/([^/?#\s]+)/.exec(code)?.[1];
+    const clean = normalizeInviteCode(fromLink ?? code);
+    if (!clean) {
+      setError('Enter the invite code you were sent');
       return;
     }
-    void run(async () => {
-      try {
-        const r = await api.post<{ groupId: string }>('/join/claim', { code, memberId });
-        toast('You joined the group');
-        navigate(`/groups/${r.groupId}`);
-      } catch (err) {
-        setError((err as ApiError).message);
-      }
-    });
+    if (!/^[A-Z0-9]+$/.test(clean)) {
+      setError('Invite codes have only letters and numbers. Check the code and try again.');
+      return;
+    }
+    navigate(`/invite/${clean}`);
   };
-
   return (
     <>
-      <PageHeader title="Join a group" back={{ to: '/groups', label: 'Groups' }} />
-      <div className="stack-lg narrow">
-        <form className="card stack" onSubmit={lookUp} noValidate>
-          <p className="muted">Ask a member of the group for its invite code.</p>
-          <Alert>{!choose ? error : ''}</Alert>
-          <TextField label="Invite code" value={code} onChange={setCode} autoCapitalize="characters" autoComplete="off" />
-          <div className="form-actions">
-            <button type="submit" className="btn btn-primary" disabled={busy}>
-              {busy && !choose ? 'Checking…' : 'Continue'}
-            </button>
-          </div>
-        </form>
-        {choose && (
-          <form className="card stack" onSubmit={claim} noValidate>
-            <h2 className="section-title">Which name is you in “{choose.groupName}”?</h2>
-            <Alert>{error}</Alert>
-            {choose.choices.length === 0 ? (
-              <p>
-                Every name in this group is already taken. Ask a member to add your name first, then enter the code again.
-              </p>
-            ) : (
-              <fieldset>
-                <legend className="visually-hidden">Choose your name</legend>
-                <div className="radio-col">
-                  {choose.choices.map((c) => (
-                    <label key={c.memberId} className="check">
-                      <input type="radio" name="claim" checked={memberId === c.memberId} onChange={() => setMemberId(c.memberId)} />
-                      <span>
-                        I'm {c.name}
-                        {c.removed && <span className="muted"> (removed)</span>}
-                      </span>
-                    </label>
-                  ))}
-                </div>
-              </fieldset>
-            )}
-            {choose.choices.length > 0 && (
-              <div className="form-actions">
-                <button type="submit" className="btn btn-primary" disabled={busy}>
-                  {busy ? 'Joining…' : 'Join group'}
-                </button>
-              </div>
-            )}
-          </form>
-        )}
-      </div>
+      <PageHeader title="Use an invite code" back={{ to: '/groups', label: 'Groups' }} />
+      <form className="card stack narrow" onSubmit={submit} noValidate>
+        <p className="muted">A friend who added you to their groups can send you your own invite code or link.</p>
+        <TextField
+          label="Invite code"
+          value={code}
+          onChange={(v) => {
+            setCode(v);
+            setError('');
+          }}
+          error={error}
+          autoCapitalize="characters"
+          autoComplete="off"
+        />
+        <div className="form-actions">
+          <button type="submit" className="btn btn-primary">
+            Continue
+          </button>
+        </div>
+      </form>
     </>
   );
 }
@@ -238,6 +197,95 @@ export function ChooseGroupPage() {
             </ul>
           </section>
         ))}
+    </>
+  );
+}
+
+/** Rename a group or change its currency. Changing the currency only relabels amounts. */
+export function EditGroupPage() {
+  const { groupId } = useParams();
+  const { data, error, loading } = useLoad(() => api.get<{ group: GroupDetail }>(`/groups/${groupId}`).then((r) => r.group), [groupId]);
+  usePageTitle('Edit group');
+  if (loading) return <Skeleton lines={4} />;
+  if (error || !data) {
+    return (
+      <>
+        <PageHeader title="Edit group" back={{ to: '/groups', label: 'Groups' }} />
+        <Alert>{error?.message}</Alert>
+      </>
+    );
+  }
+  return <EditGroupForm group={data} />;
+}
+
+function EditGroupForm({ group }: { group: GroupDetail }) {
+  const navigate = useNavigate();
+  const toast = useToast();
+  const listed = (CURRENCIES as readonly string[]).includes(group.currency);
+  const [name, setName] = useState(group.name);
+  const [choice, setChoice] = useState(listed ? group.currency : 'other');
+  const [custom, setCustom] = useState(listed ? '' : group.currency);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [error, setError] = useState('');
+  const { busy, run } = useBusy();
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    const currency = choice === 'other' ? custom : choice;
+    const n = checkGroupName(name);
+    const c = checkCurrency(currency);
+    const local: Record<string, string> = {};
+    if (!n.ok) local.name = n.message;
+    if (!c.ok) local.currency = c.message;
+    setErrors(local);
+    setError('');
+    if (!n.ok || !c.ok) return;
+    void run(async () => {
+      try {
+        await api.put(`/groups/${group.id}`, { name, currency });
+        toast('Group saved');
+        navigate(`/groups/${group.id}`);
+      } catch (err) {
+        const apiErr = err as ApiError;
+        setErrors(apiErr.fields);
+        if (!Object.keys(apiErr.fields).length) setError(apiErr.message);
+      }
+    });
+  };
+
+  return (
+    <>
+      <PageHeader title="Edit group" back={{ to: `/groups/${group.id}`, label: group.name }} />
+      <form className="card stack narrow" onSubmit={submit} noValidate>
+        <Alert>{error}</Alert>
+        <TextField
+          label="Group name"
+          hint="1–50 characters"
+          value={name}
+          onChange={(v) => {
+            setName(v);
+            setErrors((e) => withoutKey(e, 'name'));
+          }}
+          error={errors.name}
+          maxLength={200}
+        />
+        <CurrencyPicker
+          choice={choice}
+          custom={custom}
+          onChange={(c, cu) => {
+            setChoice(c);
+            setCustom(cu);
+            setErrors((e) => withoutKey(e, 'currency'));
+          }}
+          error={errors.currency}
+          note="Changing the currency only changes the symbol shown on every bill. Amounts aren't converted."
+        />
+        <div className="form-actions">
+          <button type="submit" className="btn btn-primary" disabled={busy}>
+            {busy ? 'Saving…' : 'Save changes'}
+          </button>
+        </div>
+      </form>
     </>
   );
 }

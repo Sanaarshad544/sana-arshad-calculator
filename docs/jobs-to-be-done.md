@@ -1,6 +1,6 @@
 # Jobs to Be Done
 
-Why people use the Bill Splitting Calculator. Each job is something the person needs to get done whether or not this app exists, so no job mentions the app, its screens or its buttons. Each job names the role it belongs to (see [app-roles.md](app-roles.md)), and every story in [user-stories.md](user-stories.md) names the job it serves.
+Why people use Bill Splitter. Each job is something the person needs to get done whether or not this app exists, so no job mentions the app, its screens or its buttons. Each job names the role it belongs to (see [app-roles.md](app-roles.md)), and every story in [user-stories.md](user-stories.md) names the job it serves.
 
 ## Solo diner
 

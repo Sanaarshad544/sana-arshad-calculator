@@ -1,16 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { MESSAGES } from '../../shared/rules.js';
-import { addMembers, amt, balances, createGroup, groupBill, newUser, pct, testApp, type Agent } from './helpers.js';
+import { addMembers, amt, anon, balances, createGroup, groupBill, inviteCodeOf, joinWithInvite, newUser, pct, testApp, type Agent } from './helpers.js';
 
 async function activity(agent: Agent, groupId: string): Promise<string[]> {
   const res = await agent.get(`/api/groups/${groupId}/activity`);
   return res.body.activity.map((a: { message: string }) => a.message);
 }
 
-async function joinWithCode(agent: Agent, groupId: string, owner: Agent) {
-  const code = (await owner.get(`/api/groups/${groupId}`)).body.group.inviteCode;
-  return { code, res: await agent.post('/api/join').send({ code }) };
-}
 
 describe('US-09 create a group', () => {
   it('#1 creator is the only member, an invite code exists, and it is logged', async () => {
@@ -18,7 +14,7 @@ describe('US-09 create a group', () => {
     const { groupId } = await createGroup(agent, 'Flatmates', 'CHF');
     const g = (await agent.get(`/api/groups/${groupId}`)).body.group;
     expect(g).toMatchObject({ name: 'Flatmates', currency: 'CHF', iAmLastAccount: true });
-    expect(g.inviteCode).toMatch(/^[A-Z2-9]{8}$/);
+    expect(g).not.toHaveProperty('inviteCode');
     expect(g.members).toHaveLength(1);
     expect(g.members[0]).toMatchObject({ name: username, isMe: true, hasAccount: true, balanceCents: 0 });
     expect(await activity(agent, groupId)).toEqual([`${username} created the group`]);
@@ -37,13 +33,21 @@ describe('US-09 create a group', () => {
     expect(bad.body.error.fields.currency).toBe(MESSAGES.currency);
   });
 
-  it('#4 there is no way to change the currency', async () => {
-    const { agent } = await newUser();
-    const { groupId } = await createGroup(agent);
-    expect((await agent.put(`/api/groups/${groupId}`).send({ currency: '€' })).status).toBe(404);
-    expect((await agent.patch(`/api/groups/${groupId}`).send({ currency: '€' })).status).toBe(404);
-    expect((await agent.get(`/api/groups/${groupId}`)).body.group.currency).toBe('$');
+  it('#4 any member can rename the group and change its currency; both are logged', async () => {
+    const { agent, username } = await newUser();
+    const { groupId } = await createGroup(agent, 'Flatmates', '$');
+    expect((await agent.put(`/api/groups/${groupId}`).send({ name: 'Flat 4B', currency: 'PKR' })).status).toBe(200);
+    const g = (await agent.get(`/api/groups/${groupId}`)).body.group;
+    expect([g.name, g.currency]).toEqual(['Flat 4B', 'PKR']);
+    expect(await activity(agent, groupId)).toEqual(
+      expect.arrayContaining([`${username} renamed the group from 'Flatmates' to 'Flat 4B'`, `${username} changed the currency from $ to PKR`]),
+    );
+    const bad = await agent.put(`/api/groups/${groupId}`).send({ name: '', currency: 'R1' });
+    expect(bad.body.error.fields).toEqual({ name: MESSAGES.groupName, currency: MESSAGES.currency });
+    const outsider = await newUser();
+    expect((await outsider.agent.put(`/api/groups/${groupId}`).send({ name: 'Mine now', currency: '$' })).status).toBe(403);
   });
+
 });
 
 describe('US-10 add friends by name', () => {
@@ -90,76 +94,6 @@ describe('US-10 add friends by name', () => {
     }
     await agent.post(`/api/groups/${groupId}/members/${ids.Omar}/remove`).send({});
     expect((await agent.post(`/api/groups/${groupId}/members`).send({ name: 'oMaR' })).body.error.message).toBe(MESSAGES.nameUsed);
-  });
-});
-
-describe('US-11/US-12 invite code and claiming a name', () => {
-  it('US-11 the code never changes and there is no way to regenerate it', async () => {
-    const { agent } = await newUser();
-    const { groupId } = await createGroup(agent);
-    const a = (await agent.get(`/api/groups/${groupId}`)).body.group.inviteCode;
-    await addMembers(agent, groupId, ['X']);
-    expect((await agent.get(`/api/groups/${groupId}`)).body.group.inviteCode).toBe(a);
-    expect((await agent.post(`/api/groups/${groupId}/invite-code`).send({})).status).toBe(404);
-  });
-
-  it('#1-#5 a new account claims a name and sees the full history', async () => {
-    const owner = await newUser();
-    const { groupId, meId } = await createGroup(owner.agent);
-    const ids = await addMembers(owner.agent, groupId, ['Omar', 'Sara']);
-    await owner.agent.post(`/api/groups/${groupId}/bills`).send({ bill: groupBill([meId, ids.Omar], meId, ['10.00'], { name: 'Pizza night' }) });
-
-    const omar = await newUser('omar');
-    const { code, res } = await joinWithCode(omar.agent, groupId, owner.agent);
-    expect(res.body.status).toBe('choose');
-    expect(res.body.choices.map((c: { name: string }) => c.name)).toEqual(['Omar', 'Sara']);
-
-    // Lower case and spaces in the code are fine.
-    const claim = await omar.agent.post('/api/join/claim').send({ code: ` ${code.toLowerCase()} `, memberId: ids.Omar });
-    expect(claim.status).toBe(200);
-    expect(claim.body.groupId).toBe(groupId);
-    const seen = (await omar.agent.get(`/api/groups/${groupId}/bills`)).body.bills;
-    expect(seen.map((b: { name: string }) => b.name)).toEqual(['Pizza night']);
-    expect((await omar.agent.get('/api/groups')).body.groups.map((g: { id: string }) => g.id)).toEqual([groupId]);
-    expect(await activity(owner.agent, groupId)).toContain('Omar claimed the name Omar');
-
-    // #3 a claimed name isn't offered and can't be claimed by anyone else.
-    const third = await newUser();
-    const again = await third.agent.post('/api/join').send({ code });
-    expect(again.body.choices.map((c: { name: string }) => c.name)).toEqual(['Sara']);
-    expect((await third.agent.post('/api/join/claim').send({ code, memberId: ids.Omar })).status).toBe(409);
-
-    // #4 one account can't claim a second name in the same group.
-    expect((await omar.agent.post('/api/join/claim').send({ code, memberId: ids.Sara })).status).toBe(409);
-  });
-
-  it('#6 claiming a removed, unclaimed name restores it', async () => {
-    const owner = await newUser();
-    const { groupId } = await createGroup(owner.agent);
-    const ids = await addMembers(owner.agent, groupId, ['Omar']);
-    await owner.agent.post(`/api/groups/${groupId}/members/${ids.Omar}/remove`).send({});
-    const omar = await newUser();
-    const { code, res } = await joinWithCode(omar.agent, groupId, owner.agent);
-    expect(res.body.choices).toEqual([{ memberId: ids.Omar, name: 'Omar', removed: true }]);
-    await omar.agent.post('/api/join/claim').send({ code, memberId: ids.Omar });
-    const member = (await owner.agent.get(`/api/groups/${groupId}`)).body.group.members.find((m: { name: string }) => m.name === 'Omar');
-    expect(member).toMatchObject({ status: 'current', hasAccount: true });
-  });
-
-  it('#7/#8/#9 wrong code, already in the group, then the right code', async () => {
-    const owner = await newUser();
-    const { groupId } = await createGroup(owner.agent);
-    const ids = await addMembers(owner.agent, groupId, ['Omar']);
-    const wrong = await owner.agent.post('/api/join').send({ code: 'NOPE1234' });
-    expect(wrong.status).toBe(404);
-    expect(wrong.body.error.message).toBe(MESSAGES.inviteInvalid);
-    const { res } = await joinWithCode(owner.agent, groupId, owner.agent);
-    expect(res.status).toBe(409);
-    expect(res.body.error.message).toBe(MESSAGES.alreadyInGroup);
-    const omar = await newUser();
-    await omar.agent.post('/api/join').send({ code: 'WRONG' });
-    const { code } = await joinWithCode(omar.agent, groupId, owner.agent);
-    expect((await omar.agent.post('/api/join/claim').send({ code, memberId: ids.Omar })).status).toBe(200);
   });
 });
 
@@ -328,8 +262,7 @@ describe('US-20..US-24 members leaving and coming back', () => {
     const { groupId, meId } = await createGroup(owner.agent);
     const ids = await addMembers(owner.agent, groupId, ['Omar']);
     const omar = await newUser('omar');
-    const { code } = await joinWithCode(omar.agent, groupId, owner.agent);
-    await omar.agent.post('/api/join/claim').send({ code, memberId: ids.Omar });
+    await joinWithInvite(owner.agent, groupId, 'Omar', omar.agent);
 
     const bill = await owner.agent.post(`/api/groups/${groupId}/bills`).send({ bill: groupBill([meId, ids.Omar], ids.Omar, ['20.00'], { name: 'Pizza night' }) });
     const blocked = await owner.agent.post(`/api/groups/${groupId}/members/${ids.Omar}/remove`).send({});
@@ -376,8 +309,7 @@ describe('US-20..US-24 members leaving and coming back', () => {
     const { groupId, meId } = await createGroup(owner.agent);
     const ids = await addMembers(owner.agent, groupId, ['Omar']);
     const omar = await newUser();
-    const { code } = await joinWithCode(omar.agent, groupId, owner.agent);
-    await omar.agent.post('/api/join/claim').send({ code, memberId: ids.Omar });
+    await joinWithInvite(owner.agent, groupId, 'Omar', omar.agent);
     await owner.agent.post(`/api/groups/${groupId}/bills`).send({ bill: groupBill([meId, ids.Omar], meId, ['10.00']) });
     const blocked = await omar.agent.post(`/api/groups/${groupId}/leave`).send({});
     expect(blocked.body.error.message).toBe(MESSAGES.settleBeforeLeave);
@@ -391,7 +323,7 @@ describe('US-20..US-24 members leaving and coming back', () => {
     const owner = await newUser();
     const { groupId, meId } = await createGroup(owner.agent);
     const ids = await addMembers(owner.agent, groupId, ['Omar']);
-    const code = (await owner.agent.get(`/api/groups/${groupId}`)).body.group.inviteCode;
+    const code = await inviteCodeOf(owner.agent, groupId, 'Omar');
     await owner.agent.post(`/api/groups/${groupId}/bills`).send({ bill: groupBill([meId, ids.Omar], meId, ['10.00']) });
     const warn = await owner.agent.post(`/api/groups/${groupId}/leave`).send({});
     expect(warn.status).toBe(409);
@@ -402,7 +334,8 @@ describe('US-20..US-24 members leaving and coming back', () => {
     const gone = await owner.agent.get(`/api/groups/${groupId}`);
     expect(gone.status).toBe(404);
     expect(gone.body.error.message).toBe(MESSAGES.groupGone);
-    expect((await owner.agent.post('/api/join').send({ code })).body.error.message).toBe(MESSAGES.inviteInvalid);
+    // Omar's invite only pointed at this group, so it no longer works.
+    expect((await anon().get(`/api/invites/${code}`)).body.error.message).toBe(MESSAGES.inviteInvalid);
     const { pool } = testApp();
     for (const table of ['members', 'group_bills', 'settle_ups', 'activity']) {
       expect((await pool.query(`SELECT count(*)::int AS n FROM ${table} WHERE group_id = $1`, [groupId])).rows[0].n).toBe(0);
@@ -428,37 +361,23 @@ describe('US-20..US-24 members leaving and coming back', () => {
     expect(m0).toMatchObject({ name: 'M0', status: 'current' });
   });
 
-  it('US-23 #4 / US-24 rejoining with the code restores access and editing', async () => {
+  it('US-23 #3/#4 Restore gives an account its access and editing back (the only way back in)', async () => {
     const owner = await newUser();
     const { groupId, meId } = await createGroup(owner.agent);
     const ids = await addMembers(owner.agent, groupId, ['Omar']);
     const omar = await newUser();
-    const { code } = await joinWithCode(omar.agent, groupId, owner.agent);
-    await omar.agent.post('/api/join/claim').send({ code, memberId: ids.Omar });
+    const { code } = await joinWithInvite(owner.agent, groupId, 'Omar', omar.agent);
     const bill = await owner.agent.post(`/api/groups/${groupId}/bills`).send({ bill: groupBill([meId, ids.Omar], meId, ['10.00']) });
     await owner.agent.post(`/api/groups/${groupId}/settle-ups`).send({ fromId: ids.Omar, toId: meId, amount: '5.00' });
     await owner.agent.post(`/api/groups/${groupId}/members/${ids.Omar}/remove`).send({});
+    expect((await omar.agent.get(`/api/groups/${groupId}`)).status).toBe(403);
+    // His used invite can't bring him back.
+    expect((await omar.agent.post(`/api/invites/${code}/accept`).send({})).status).toBe(409);
 
-    const rejoin = await omar.agent.post('/api/join').send({ code });
-    expect(rejoin.body).toEqual({ status: 'rejoined', groupId });
-    expect(await activity(owner.agent, groupId)).toContain('Omar rejoined with the invite code');
+    await owner.agent.post(`/api/groups/${groupId}/members/${ids.Omar}/restore`).send({});
     expect((await omar.agent.get(`/api/groups/${groupId}/bills`)).body.bills).toHaveLength(1);
     const edit = await owner.agent.put(`/api/groups/${groupId}/bills/${bill.body.billId}`).send({ bill: groupBill([meId, ids.Omar], meId, ['12.00']) });
     expect(edit.status).toBe(200);
-  });
-
-  it('US-24 #2 a full group refuses a rejoin', async () => {
-    const owner = await newUser();
-    const { groupId } = await createGroup(owner.agent);
-    const ids = await addMembers(owner.agent, groupId, ['Omar']);
-    const omar = await newUser();
-    const { code } = await joinWithCode(omar.agent, groupId, owner.agent);
-    await omar.agent.post('/api/join/claim').send({ code, memberId: ids.Omar });
-    await owner.agent.post(`/api/groups/${groupId}/members/${ids.Omar}/remove`).send({});
-    await addMembers(owner.agent, groupId, Array.from({ length: 49 }, (_, i) => `F${i}`));
-    const res = await omar.agent.post('/api/join').send({ code });
-    expect(res.status).toBe(400);
-    expect((await omar.agent.get(`/api/groups/${groupId}`)).status).toBe(403);
   });
 });
 
@@ -466,7 +385,7 @@ describe('US-33 dashboard', () => {
   it('shows per-currency totals, groups with my balance, latest solo bills', async () => {
     const me = await newUser();
     const empty = (await me.agent.get('/api/dashboard')).body;
-    expect(empty).toEqual({ owe: [], owed: [], groups: [], soloBills: [] });
+    expect(empty).toEqual({ owe: [], owed: [], debts: [], groups: [], soloBills: [] });
 
     const usd = await createGroup(me.agent, 'Dollars', '$');
     const rs = await createGroup(me.agent, 'Rupees', 'Rs');
@@ -483,5 +402,10 @@ describe('US-33 dashboard', () => {
       ['Rupees', -40000],
     ]);
     expect(d.soloBills.map((b: { name: string }) => b.name)).toEqual(['Solo']);
+    // Who: the suggested payments that involve me.
+    expect(d.debts).toEqual([
+      { groupId: usd.groupId, groupName: 'Dollars', currency: '$', otherName: 'Ali', cents: 1500, direction: 'owed' },
+      { groupId: rs.groupId, groupName: 'Rupees', currency: 'Rs', otherName: 'Sara', cents: 40000, direction: 'owe' },
+    ]);
   });
 });

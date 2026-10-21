@@ -5,8 +5,9 @@ import type { GroupBillDetail, GroupDetail, SettleUpDto } from '../../shared/api
 import { MAX_FIELD_CENTS, centsToInput, parseHundredths } from '../../shared/money.js';
 import { MESSAGES, restoreToChange } from '../../shared/rules.js';
 import { ApiError, api } from '../api.js';
-import { calculate, emptyBill, focusFirstError, fromInput, revealResults, stripKeys, toGroupBillInput, type BillFormState, type CalcResult } from '../billEditor.js';
-import { useBusy, useLoad } from '../hooks.js';
+import { calculate, emptyBill, focusFirstError, fromInput, rateLabels, revealResults, stripKeys, toGroupBillInput, type BillFormState, type CalcResult } from '../billEditor.js';
+import { clearFieldError, withoutKey } from '../fieldErrors.js';
+import { useBusy, useFocusFirstError, useLoad } from '../hooks.js';
 import { BillForm } from '../components/BillForm.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import { Results } from '../components/Results.js';
@@ -60,10 +61,13 @@ function GroupBillEditor({ group, saved }: { group: GroupDetail; saved: GroupBil
   const [errors, setErrors] = useState<FieldErrors>({});
   const [result, setResult] = useState<CalcResult | null>(saved ? { totals: saved.totals, shares: saved.shares } : null);
   const [pageError, setPageError] = useState('');
+  // Problems with Delete show at the top, next to the button that caused them.
+  const [headerError, setHeaderError] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
   const { busy, run } = useBusy();
   const formRef = useRef<HTMLFormElement>(null);
   const resultsRef = useRef<HTMLElement>(null);
+  const focusErrors = useFocusFirstError(formRef);
   const guard = useUnsavedGuard(!locked && JSON.stringify(stripKeys(state)) !== snapshot);
 
   // A view-only bill shows everyone on it, including removed members.
@@ -116,13 +120,15 @@ function GroupBillEditor({ group, saved }: { group: GroupDetail; saved: GroupBil
       } catch (err) {
         const e = err as ApiError;
         setErrors(e.fields);
-        setPageError(Object.keys(e.fields).length ? '' : e.message);
+        setPageError(e.message);
+        if (Object.keys(e.fields).length) focusErrors();
       }
     });
 
   const onDelete = () =>
     run(async () => {
       if (!saved) return;
+      setHeaderError('');
       try {
         await api.del(`/groups/${group.id}/bills/${saved.id}`);
         setConfirmDelete(false);
@@ -131,7 +137,7 @@ function GroupBillEditor({ group, saved }: { group: GroupDetail; saved: GroupBil
         navigate(backTo);
       } catch (err) {
         setConfirmDelete(false);
-        setPageError((err as ApiError).message);
+        setHeaderError((err as ApiError).message);
       }
     });
 
@@ -142,12 +148,13 @@ function GroupBillEditor({ group, saved }: { group: GroupDetail; saved: GroupBil
           <button
             type="button"
             className="btn btn-danger-outline"
-            onClick={() => (locked ? setPageError(restoreToChange(locked)) : setConfirmDelete(true))}
+            onClick={() => (locked ? setHeaderError(restoreToChange(locked)) : setConfirmDelete(true))}
           >
             Delete
           </button>
         )}
       </PageHeader>
+      <Alert>{headerError}</Alert>
       {locked && (
         <Alert tone="info">
           {locked} was removed from the group, so this bill is view only. Restore {locked} on the Members tab to change it.
@@ -162,21 +169,38 @@ function GroupBillEditor({ group, saved }: { group: GroupDetail; saved: GroupBil
           onCalculate();
         }}
       >
-        <Alert>{pageError}</Alert>
         <p className="muted">Currency: {group.currency}</p>
-        <BillForm kind="group" state={state} onChange={change} errors={errors} members={formMembers} readOnly={!!locked} />
-        <div className="form-actions">
-          {!locked && (
+        <BillForm
+          kind="group"
+          state={state}
+          onChange={change}
+          errors={errors}
+          members={formMembers}
+          readOnly={!!locked}
+          onFieldEdit={(key) => setErrors((e) => clearFieldError(e, key))}
+        />
+        {!locked && (
+          <div className="form-actions">
             <button type="submit" className="btn btn-primary">
               Calculate
             </button>
-          )}
-          <button type="button" className="btn btn-secondary" onClick={() => void onSave()} disabled={busy}>
-            {busy ? 'Saving…' : 'Save bill'}
-          </button>
-        </div>
+          </div>
+        )}
       </form>
-      <Results ref={resultsRef} result={result} currency={group.currency} names={names} payerId={result ? state.payerId : null} />
+      <Results
+        ref={resultsRef}
+        result={result}
+        currency={group.currency}
+        names={names}
+        payerId={result ? state.payerId : null}
+        rates={rateLabels(state)}
+      />
+      <div className="save-bar">
+        <Alert>{pageError}</Alert>
+        <button type="button" className="btn btn-primary" onClick={() => void onSave()} disabled={busy}>
+          {busy ? 'Saving…' : 'Save bill'}
+        </button>
+      </div>
       {guard.dialog}
       <ConfirmDialog
         open={confirmDelete}
@@ -312,7 +336,10 @@ function SettleUpEditor({ group, saved }: { group: GroupDetail; saved: SettleUpD
               id="settle-from"
               className="input select"
               value={fromId}
-              onChange={(e) => setFromId(e.target.value)}
+              onChange={(e) => {
+                setFromId(e.target.value);
+                setErrors((x) => withoutKey(x, 'people'));
+              }}
               aria-invalid={errors.people ? true : undefined}
               aria-describedby={errors.people ? 'settle-people-error' : undefined}
             >
@@ -332,7 +359,10 @@ function SettleUpEditor({ group, saved }: { group: GroupDetail; saved: SettleUpD
               id="settle-to"
               className="input select"
               value={toId}
-              onChange={(e) => setToId(e.target.value)}
+              onChange={(e) => {
+                setToId(e.target.value);
+                setErrors((x) => withoutKey(x, 'people'));
+              }}
               aria-invalid={errors.people ? true : undefined}
               aria-describedby={errors.people ? 'settle-people-error' : undefined}
             >
@@ -345,7 +375,16 @@ function SettleUpEditor({ group, saved }: { group: GroupDetail; saved: SettleUpD
             </select>
             <ErrorText id="settle-people-error">{errors.people}</ErrorText>
           </div>
-          <TextField label={`Amount (${group.currency})`} inputMode="decimal" value={amount} onChange={setAmount} error={errors.amount} />
+          <TextField
+            label={`Amount (${group.currency})`}
+            inputMode="decimal"
+            value={amount}
+            onChange={(v) => {
+              setAmount(v);
+              setErrors((x) => withoutKey(x, 'amount'));
+            }}
+            error={errors.amount}
+          />
         </fieldset>
         <div className="form-actions">
           <button type="submit" className="btn btn-primary" disabled={busy}>

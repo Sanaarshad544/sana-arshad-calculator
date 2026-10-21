@@ -1,11 +1,11 @@
-import { useEffect, useId, type InputHTMLAttributes, type ReactNode } from 'react';
+import { useEffect, useId, useState, type InputHTMLAttributes, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { formatMoney, formatSignedMoney } from '../../shared/money.js';
 
 /** Sets the browser tab title for the page. */
 export function usePageTitle(title: string): void {
   useEffect(() => {
-    document.title = `${title} · Bill Splitting Calculator`;
+    document.title = `${title} · Bill Splitter`;
   }, [title]);
 }
 
@@ -67,6 +67,68 @@ export function TextField({ label, value, onChange, error, hint, hideLabel, id, 
         aria-describedby={describedBy}
         {...rest}
       />
+      {error && (
+        <p id={errorId} className="field-error">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** A password box with an eye button that shows or hides what's typed. */
+export function PasswordField({ label, value, onChange, error, hint, autoComplete }: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  error?: string;
+  hint?: ReactNode;
+  autoComplete: string;
+}) {
+  const [shown, setShown] = useState(false);
+  const id = useId();
+  const errorId = `${id}-error`;
+  const hintId = `${id}-hint`;
+  const describedBy = [hint ? hintId : '', error ? errorId : ''].filter(Boolean).join(' ') || undefined;
+  return (
+    <div className="field">
+      <label htmlFor={id} className="field-label">
+        {label}
+      </label>
+      {hint && (
+        <div id={hintId} className="field-hint">
+          {hint}
+        </div>
+      )}
+      <div className="password-row">
+        <input
+          id={id}
+          className="input"
+          type={shown ? 'text' : 'password'}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          autoComplete={autoComplete}
+          // Shown as text, phone keyboards would otherwise capitalise or correct it.
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={describedBy}
+        />
+        <button
+          type="button"
+          className={shown ? 'eye-button eye-button-on' : 'eye-button'}
+          aria-label={shown ? 'Hide password' : 'Show password'}
+          aria-controls={id}
+          onClick={() => setShown((s) => !s)}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" fill="none" stroke="currentColor" strokeWidth="2" />
+            <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" strokeWidth="2" />
+            {shown && <path d="M4 4l16 16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />}
+          </svg>
+        </button>
+      </div>
       {error && (
         <p id={errorId} className="field-error">
           {error}

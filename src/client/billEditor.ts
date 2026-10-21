@@ -16,6 +16,7 @@ import {
   type Totals,
 } from '../shared/bill.js';
 import { CURRENCIES, MAX_ITEMS, checkCurrency } from '../shared/rules.js';
+import { formatPercent, parseHundredths } from '../shared/money.js';
 
 export interface ItemRow {
   key: number;
@@ -47,9 +48,10 @@ export function emptyBill(over: Partial<BillFormState> = {}): BillFormState {
   return {
     name: '',
     items: [newItem()],
-    tax: { mode: 'percent', value: '0' },
+    // Blank means 0, so typing starts from an empty box ("5", not "05").
+    tax: { mode: 'percent', value: '' },
     otherCharges: { mode: 'amount', value: '' },
-    tip: { mode: 'percent', value: '0' },
+    tip: { mode: 'percent', value: '' },
     tipOn: 'items',
     currencyChoice: '$',
     customCurrency: '',
@@ -156,4 +158,28 @@ export function revealResults(results: HTMLElement | null): void {
 export function focusFirstError(root: HTMLElement | null): void {
   const target = root?.querySelector<HTMLElement>('[aria-invalid="true"], [data-error-anchor]');
   target?.focus();
+}
+
+export interface RateLabels {
+  tax: string;
+  other: string;
+  tip: string;
+}
+
+/** The rate behind each results line: "(5%)", "(15% of items + tax)". Blank for amounts. */
+export function rateLabels(state: BillFormState): RateLabels {
+  // A blank box counts as nothing, so it gets no rate.
+  const pct = (c: ChargeInput) => {
+    if (c.mode !== 'percent' || c.value.trim() === '') return null;
+    const bp = parseHundredths(c.value);
+    return bp === null ? null : `${formatPercent(bp)}%`;
+  };
+  const tax = pct(state.tax);
+  const other = pct(state.otherCharges);
+  const tip = pct(state.tip);
+  return {
+    tax: tax ? `(${tax})` : '',
+    other: other ? `(${other})` : '',
+    tip: tip ? `(${tip} of ${state.tipOn === 'items_tax' ? 'items + tax' : 'items'})` : '',
+  };
 }

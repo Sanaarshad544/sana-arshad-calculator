@@ -8,7 +8,8 @@ import { PASSWORD, api, expectNoHorizontalScroll, makeGroup, signUpFast, uniqueN
 
 const MSG = {
   username: 'Username must be 3–30 characters, using only letters, numbers and _',
-  password: 'Password must be 8–128 characters',
+  passwordShort: 'Password must be at least 8 characters',
+  passwordLong: 'Password can be at most 128 characters',
   currency: 'Currency symbol must be 1–3 characters with no digits',
   billName: 'Bill name can be at most 60 characters',
   itemName: 'Item name can be at most 40 characters',
@@ -48,12 +49,29 @@ const saveBill = (page: Page) => page.getByRole('button', { name: 'Save bill' })
 const results = (page: Page) => page.getByRole('region', { name: 'Results' });
 const grandTotal = (page: Page) => page.getByTestId('grand-total');
 
-/** The value cell of one line of the totals: Subtotal, Tax, Other charges, Tip or Total. */
-function totalLine(page: Page, label: 'Subtotal' | 'Tax' | 'Other charges' | 'Tip' | 'Total'): Locator {
+type LineName = 'Subtotal' | 'Tax' | 'Other charges' | 'Tip' | 'Total';
+
+/**
+ * One line of the totals: Subtotal, Tax, Other charges, Tip or Total. A % line also carries its
+ * rate in its label ("Tax (5%)", "Tip (15% of items + tax)"), so the name is matched with or without one.
+ */
+function totalRow(page: Page, name: LineName): Locator {
   return results(page)
     .locator('dl.totals > div')
-    .filter({ has: page.locator('dt', { hasText: new RegExp(`^${label}$`) }) })
-    .locator('dd');
+    .filter({ has: page.locator('dt', { hasText: new RegExp(`^${name}( \\(.+\\))?$`) }) });
+}
+
+/** The value cell of one line of the totals. */
+const totalLine = (page: Page, name: LineName) => totalRow(page, name).locator('dd');
+
+/** The label cell of one line of the totals. */
+const totalLabel = (page: Page, name: LineName) => totalRow(page, name).locator('dt');
+
+/** What a charge's line should read: its name, plus its rate when it is a % (a tip also says what it is a % of). */
+function lineLabel(name: ChargeLabel, charge: { mode: Mode; value: string }, tipOn: 'items' | 'items_tax' = 'items'): string {
+  if (charge.mode === 'amount') return name;
+  const of = name === 'Tip' ? ` of ${tipOn === 'items_tax' ? 'items + tax' : 'items'}` : '';
+  return `${name} (${charge.value}%${of})`;
 }
 
 /** Opens a blank solo bill. Browsers may ask about unsaved changes when a test reloads; always agree. */
@@ -83,7 +101,8 @@ async function savedBills(page: Page) {
 /**
  * Types each bad value into `field`, presses `via`, and checks the message sits next to the field,
  * no result is shown, and (for Save) the page did not move on. Then fixes the field with `fix`
- * and presses Calculate, so each bad value is proved on its own and not by a leftover message.
+ * (its message must go at once, before Calculate) and presses Calculate, so each bad value is
+ * proved on its own and not by a leftover message.
  */
 async function expectRejected(page: Page, field: Locator, message: string, bad: string[], fix: string, via: 'Calculate' | 'Save bill'): Promise<void> {
   for (const value of bad) {
@@ -95,6 +114,9 @@ async function expectRejected(page: Page, field: Locator, message: string, bad: 
     await expect(grandTotal(page)).toHaveCount(0);
     await expect(page).toHaveURL(/\/solo\/new$/);
     await field.fill(fix);
+    // The message goes as soon as that field is edited, before Calculate is pressed (US-26 #9).
+    await expect(page.getByText(message, { exact: true }), `"${value}" fixed, before Calculate`).toHaveCount(0);
+    await expect(field).not.toHaveAttribute('aria-invalid', 'true');
     await calculate(page);
     await expect(page.getByText(message, { exact: true })).toHaveCount(0);
     await expect(grandTotal(page)).toBeVisible();
@@ -118,7 +140,7 @@ test.describe('US-01 #5 bad usernames', () => {
       await page.goto('/signup');
       await expect(page.getByRole('heading', { level: 1, name: 'Create an account' })).toBeVisible();
       await page.getByLabel('Username').fill(username);
-      await page.getByLabel('Password').fill(PASSWORD);
+      await page.getByLabel('Password', { exact: true }).fill(PASSWORD);
       await page.getByRole('button', { name: 'Create account' }).click();
       await expect(page.getByText(MSG.username, { exact: true })).toBeVisible();
       await expect(page.getByLabel('Username')).toHaveAccessibleDescription(new RegExp(MSG.username));
@@ -130,6 +152,55 @@ test.describe('US-01 #5 bad usernames', () => {
   }
 });
 
+test.describe('US-01 #7 bad passwords', () => {
+  const bad: [string, string, string, string][] = [
+    ['blank', '', MSG.passwordShort, MSG.passwordLong],
+    ['7 characters', 'abcdefg', MSG.passwordShort, MSG.passwordLong],
+    ['129 characters', 'p'.repeat(129), MSG.passwordLong, MSG.passwordShort],
+  ];
+  for (const [what, password, message, otherMessage] of bad) {
+    test(`US-01 #7 sign-up refuses a password that is ${what}`, async ({ page }, info) => {
+      const username = uniqueName('pw', info);
+      await page.goto('/signup');
+      await expect(page.getByRole('heading', { level: 1, name: 'Create an account' })).toBeVisible();
+      await page.getByLabel('Username').fill(username);
+      await page.getByLabel('Password', { exact: true }).fill(password);
+      await page.getByRole('button', { name: 'Create account' }).click();
+      // Too short and too long each get their own message, tied to the box, and the hint stays.
+      await expect(page.getByText(message, { exact: true })).toBeVisible();
+      await expect(page.getByText(otherMessage, { exact: true })).toHaveCount(0);
+      await expect(page.getByLabel('Password', { exact: true })).toHaveAccessibleDescription(new RegExp(message));
+      await expect(page.getByText('At least 8 characters', { exact: true })).toBeVisible();
+      // No account was created: nobody is logged in and the username is still free.
+      await expect(page.getByRole('heading', { level: 1, name: 'Dashboard' })).toHaveCount(0);
+      expect((await page.request.get('/api/me')).ok()).toBe(false);
+      expect((await page.request.post('/api/auth/signup', { data: { username, password: PASSWORD } })).status()).toBe(201);
+    });
+  }
+});
+
+test.describe('US-01 #8 password limits', () => {
+  // Spaces and symbols count like any other character.
+  for (const [what, password] of [['8', 'a b!c@d#'], ['128', 'x y!'.repeat(32)]] as const) {
+    test(`US-01 #8 a password of exactly ${what} characters is accepted`, async ({ page }, info) => {
+      expect(Array.from(password)).toHaveLength(Number(what));
+      const username = uniqueName('lim', info);
+      await page.goto('/signup');
+      await expect(page.getByRole('heading', { level: 1, name: 'Create an account' })).toBeVisible();
+      await page.getByLabel('Username').fill(username);
+      await page.getByLabel('Password', { exact: true }).fill(password);
+      await page.getByRole('button', { name: 'Create account' }).click();
+      await expect(page.getByRole('heading', { name: 'Save your recovery code' })).toBeVisible();
+      await expect(page.getByText(MSG.passwordShort, { exact: true })).toHaveCount(0);
+      await expect(page.getByText(MSG.passwordLong, { exact: true })).toHaveCount(0);
+      // The whole password was kept: it logs in again.
+      await page.context().clearCookies();
+      const login = await page.request.post('/api/auth/login', { data: { username, password } });
+      expect(login.ok()).toBe(true);
+    });
+  }
+});
+
 test('US-03 #4 a bad new password is refused and the old password still works', async ({ page }) => {
   const username = uniqueName('rp', test.info());
   const signup = await page.request.post('/api/auth/signup', { data: { username, password: PASSWORD } });
@@ -137,14 +208,20 @@ test('US-03 #4 a bad new password is refused and the old password still works', 
   const { recoveryCode } = (await signup.json()) as { recoveryCode: string };
   await page.context().clearCookies();
 
-  for (const [what, newPassword] of [['blank', ''], ['7 characters', 'abcdefg'], ['129 characters', 'p'.repeat(129)]] as const) {
+  for (const [what, newPassword, message, otherMessage] of [
+    ['blank', '', MSG.passwordShort, MSG.passwordLong],
+    ['7 characters', 'abcdefg', MSG.passwordShort, MSG.passwordLong],
+    ['129 characters', 'p'.repeat(129), MSG.passwordLong, MSG.passwordShort],
+  ] as const) {
     await page.goto('/reset');
     await expect(page.getByRole('heading', { level: 1, name: 'Reset your password' })).toBeVisible();
     await page.getByLabel('Username').fill(username);
     await page.getByLabel('Recovery code').fill(recoveryCode);
-    await page.getByLabel('New password').fill(newPassword);
+    await page.getByLabel('New password', { exact: true }).fill(newPassword);
     await page.getByRole('button', { name: 'Reset password' }).click();
-    await expect(page.getByText(MSG.password, { exact: true }), what).toBeVisible();
+    // Too short and too long each get their own message, and only that one.
+    await expect(page.getByText(message, { exact: true }), what).toBeVisible();
+    await expect(page.getByText(otherMessage, { exact: true }), what).toHaveCount(0);
     // No new recovery code was issued and nobody was logged in.
     await expect(page.getByRole('heading', { name: 'Save your recovery code' })).toHaveCount(0);
     expect((await page.request.get('/api/me')).ok(), what).toBe(false);
@@ -154,7 +231,7 @@ test('US-03 #4 a bad new password is refused and the old password still works', 
   await page.goto('/login');
   await expect(page.getByRole('heading', { level: 1, name: 'Log in' })).toBeVisible();
   await page.getByLabel('Username').fill(username);
-  await page.getByLabel('Password').fill(PASSWORD);
+  await page.getByLabel('Password', { exact: true }).fill(PASSWORD);
   await page.getByRole('button', { name: 'Log in' }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'Dashboard' })).toBeVisible();
   // ...and the recovery code was not used up by the refused resets.
@@ -369,6 +446,10 @@ for (const c of SOLO_CASES) {
     await expect(totalLine(page, 'Tip')).toHaveText(c.expected.tip);
     await expect(totalLine(page, 'Total')).toHaveText(c.expected.total);
     await expect(grandTotal(page)).toHaveText(c.expected.total);
+    // A % charge's line also says its rate (US-26 #10); an amount's line doesn't.
+    if (c.tax) await expect(totalLabel(page, 'Tax')).toHaveText(lineLabel('Tax', c.tax));
+    if (c.other) await expect(totalLabel(page, 'Other charges')).toHaveText(lineLabel('Other charges', c.other));
+    if (c.tip) await expect(totalLabel(page, 'Tip')).toHaveText(lineLabel('Tip', c.tip, c.tipOn));
     if (c.noError) {
       await expect(page.locator('.field-error')).toHaveCount(0);
       await expect(page.getByRole('alert')).toHaveCount(0);
@@ -380,11 +461,11 @@ for (const c of SOLO_CASES) {
 // US-06 Currency
 // ======================================================================
 
-test('US-06 #1 the currency picker offers the 12 symbols and Other, nothing else', async ({ page }, info) => {
+test('US-06 #1 the currency picker offers the 13 symbols (PKR in capitals) and Other, nothing else', async ({ page }, info) => {
   await newSoloPage(page, info);
   const options = await page.getByLabel('Currency', { exact: true }).locator('option').allTextContents();
-  expect(options).toEqual(['$', '€', '£', '¥', '₹', 'Rs', '₩', '₺', 'R$', 'CHF', 'AED', 'SAR', 'Other']);
-  expect(options).toHaveLength(13);
+  expect(options).toEqual(['$', '€', '£', '¥', '₹', 'Rs', 'PKR', '₩', '₺', 'R$', 'CHF', 'AED', 'SAR', 'Other']);
+  expect(options).toHaveLength(14);
 });
 
 test.describe('US-06 #4 a bad "Other" currency symbol is refused on Calculate and on Save', () => {
@@ -532,6 +613,10 @@ test('US-08 #1 reopening shows every input, the % / amount settings and the "tip
   await expect(totalLine(page, 'Other charges')).toHaveText('$7.50');
   await expect(totalLine(page, 'Tip')).toHaveText('$13.53');
   await expect(grandTotal(page)).toHaveText('$129.28');
+  // The rates are shown as saved, too: tax and tip are %, other charges is an amount.
+  await expect(totalLabel(page, 'Tax')).toHaveText('Tax (8.25%)');
+  await expect(totalLabel(page, 'Other charges')).toHaveText('Other charges');
+  await expect(totalLabel(page, 'Tip')).toHaveText('Tip (12.5% of items + tax)');
 });
 
 test('US-08 #3 editing other charges to 10% and saving recalculates the total', async ({ page }, info) => {
@@ -544,6 +629,7 @@ test('US-08 #3 editing other charges to 10% and saving recalculates the total', 
   await expect(page.getByRole('status').getByText('Bill saved').first()).toBeVisible();
   // 100.00 + 8.25 + 10.00 (10% of items) + 13.53 = 131.78
   await expect(totalLine(page, 'Other charges')).toHaveText('$10.00');
+  await expect(totalLabel(page, 'Other charges')).toHaveText('Other charges (10%)');
   await expect(grandTotal(page)).toHaveText('$131.78');
   const detail = await api<{ bill: { totalCents: number } }>(page, 'get', `/solo-bills/${id}`);
   expect(detail.bill.totalCents).toBe(13178);
@@ -646,6 +732,7 @@ test('US-25 #9 other charges of exactly 0.01, 1,000,000.00, 0.01% or 100% are ac
     await setCharge(page, 'Other charges', mode, value);
     await calculate(page);
     await expect(totalLine(page, 'Other charges'), `${value} ${mode}`).toHaveText(other);
+    await expect(totalLabel(page, 'Other charges'), `${value} ${mode}`).toHaveText(lineLabel('Other charges', { mode, value }));
     await expect(grandTotal(page), `${value} ${mode}`).toHaveText(total);
     await expect(page.locator('.field-error')).toHaveCount(0);
   }
@@ -842,7 +929,7 @@ test('US-27 #1 when the server answers 503, the message shows and every input is
 });
 
 // ======================================================================
-// US-34 Layout and Account
+// US-34 Layout and Settings
 // ======================================================================
 
 test('US-34 #3 the log-in, sign-up and reset pages never scroll sideways at 360 px', async ({ page }, info) => {
@@ -860,14 +947,14 @@ test('US-34 #3 the log-in, sign-up and reset pages never scroll sideways at 360 
   await page.goto('/signup');
   await expect(page.getByRole('heading', { level: 1, name: 'Create an account' })).toBeVisible();
   await page.getByLabel('Username').fill('x'.repeat(31));
-  await page.getByLabel('Password').fill('short');
+  await page.getByLabel('Password', { exact: true }).fill('short');
   await page.getByRole('button', { name: 'Create account' }).click();
   await expect(page.getByText(MSG.username, { exact: true })).toBeVisible();
   await expectNoHorizontalScroll(page);
   await page.goto('/login');
   await expect(page.getByRole('heading', { level: 1, name: 'Log in' })).toBeVisible();
   await page.getByLabel('Username').fill(uniqueName('nobody', info));
-  await page.getByLabel('Password').fill('wrong password');
+  await page.getByLabel('Password', { exact: true }).fill('wrong password');
   await page.getByRole('button', { name: 'Log in' }).click();
   await expect(page.getByRole('alert')).toHaveText('Username or password is incorrect');
   await expectNoHorizontalScroll(page);
@@ -878,11 +965,20 @@ test('US-34 #3 the join page, a settle-up page and the Activity tab never scroll
   const { groupId } = await makeGroup(page, 'A group with a rather long name for phones', 'CHF', ['Somebody with a long name', 'Another very long friend name']);
   await page.setViewportSize({ width: 360, height: 740 });
 
+  // The join page is now "Use an invite code": one box and Continue, which opens /invite/<CODE>.
+  const notFound = "That invite link isn't valid. Check the code and try again.";
   await page.goto('/join');
-  await expect(page.getByRole('heading', { level: 1, name: 'Join a group' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: 'Use an invite code' })).toBeVisible();
   await expectNoHorizontalScroll(page);
   await page.getByRole('button', { name: 'Continue' }).click();
-  await expect(page.getByRole('alert')).toBeVisible();
+  await expect(page.getByText('Enter the invite code you were sent', { exact: true })).toBeVisible();
+  await expectNoHorizontalScroll(page);
+  // A code that matches nobody leads to the "not found" page, which fits too.
+  await page.getByLabel('Invite code').fill('zzzz2345');
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await expect(page).toHaveURL(/\/invite\/ZZZZ2345$/);
+  await expect(page.getByRole('heading', { level: 1, name: 'Invite not found' })).toBeVisible();
+  await expect(page.getByText(notFound, { exact: true })).toBeVisible();
   await expectNoHorizontalScroll(page);
 
   await page.goto(`/groups/${groupId}/settle-ups/new`);
@@ -909,10 +1005,10 @@ test('US-34 #3 the Activity tab still fits at 360 px for a 30-character username
   await expectNoHorizontalScroll(page);
 });
 
-test('US-34 #5 the Account page shows my username', async ({ page }, info) => {
+test('US-34 #5 the Settings page shows my username', async ({ page }, info) => {
   const username = await signUpFast(page, info);
-  await page.getByRole('link', { name: 'Account' }).first().click();
-  await expect(page.getByRole('heading', { level: 1, name: 'Account' })).toBeVisible();
+  await page.getByRole('link', { name: 'Settings' }).first().click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Settings' })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Username' }).getByText(username, { exact: true })).toBeVisible();
   // Appearance setting and Log out button are on the same page (US-34 #5).
   await expect(page.getByRole('radio', { name: 'Light' })).toBeVisible();
@@ -936,8 +1032,8 @@ test('US-35 #2 on a dark device, choosing "Light" makes the app light', async ({
   await page.emulateMedia({ colorScheme: 'dark' });
   await expect.poll(bg).toBe(darkBg);
 
-  await page.getByRole('link', { name: 'Account' }).first().click();
-  await expect(page.getByRole('heading', { level: 1, name: 'Account' })).toBeVisible();
+  await page.getByRole('link', { name: 'Settings' }).first().click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Settings' })).toBeVisible();
   await page.getByRole('radio', { name: 'Light' }).click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   await expect.poll(bg).not.toBe(darkBg);

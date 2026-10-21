@@ -63,30 +63,3 @@ describe('US-20 #4 removing a member changes nobody\'s balance', () => {
   });
 });
 
-describe('US-24 #2 rejoining a full group', () => {
-  it('US-24 #2 says "This group already has 50 members, so you can\'t rejoin right now" and Omar stays removed', async () => {
-    const owner = await newUser('own');
-    const { groupId } = await createGroup(owner.agent);
-    const ids = await addMembers(owner.agent, groupId, ['Omar']);
-    const omar = await newUser('omar');
-    const code = (await owner.agent.get(`/api/groups/${groupId}`)).body.group.inviteCode as string;
-    const claim = await omar.agent.post('/api/join/claim').send({ code, memberId: ids.Omar });
-    expect(claim.status).toBe(200);
-    expect((await owner.agent.post(`/api/groups/${groupId}/members/${ids.Omar}/remove`).send({})).status).toBe(200);
-
-    // The owner plus 49 friends make 50 current members.
-    await addMembers(owner.agent, groupId, Array.from({ length: 49 }, (_, i) => `F${i}`));
-    const members = await allMembers(owner.agent, groupId);
-    expect(members.filter((m) => m.status === 'current')).toHaveLength(50);
-
-    const rejoin = await omar.agent.post('/api/join').send({ code });
-    expect(rejoin.status).toBe(400);
-    expect(rejoin.body.error.message).toBe("This group already has 50 members, so you can't rejoin right now");
-
-    // He stays removed: still no access, still listed as removed, still 50 current members.
-    expect((await omar.agent.get(`/api/groups/${groupId}`)).status).toBe(403);
-    const afterwards = await allMembers(owner.agent, groupId);
-    expect(afterwards.find((m) => m.id === ids.Omar)?.status).toBe('removed');
-    expect(afterwards.filter((m) => m.status === 'current')).toHaveLength(50);
-  });
-});

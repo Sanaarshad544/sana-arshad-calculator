@@ -1,8 +1,11 @@
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { expect, test, type Browser, type BrowserContext, type Locator, type Page, type TestInfo } from '@playwright/test';
 import { api, makeGroup, signUpFast } from './helpers.js';
 
 // Acceptance-criteria tests for the group stories (docs/user-stories.md).
 // Each test name says which story and criterion numbers it proves.
+//
+// Joining works through personal invites: every person added by name has their own
+// invite code and link (/invite/<code>); there is no group-wide code and no name list.
 
 // ---------- helpers ----------
 
@@ -64,8 +67,16 @@ const balanceRow = (page: Page, name: string) => page.getByTestId('balance-row')
 const fieldError = (page: Page, text: string) => page.locator('p.field-error', { hasText: text });
 const shareAmounts = (page: Page) => page.locator('[data-testid="share"] .share-amount');
 const shareNames = (page: Page) => page.locator('[data-testid="share"] .share-name');
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** The amount on one results line. The label is the whole line, rate included: "Tax (5%)", "Tip (15% of items)". */
 const totalsRow = (page: Page, label: string) =>
-  page.locator('dl.totals > div').filter({ has: page.locator('dt', { hasText: new RegExp(`^${label}$`) }) }).locator('dd');
+  page.locator('dl.totals > div').filter({ has: page.locator('dt', { hasText: new RegExp(`^${escapeRegExp(label)}$`) }) }).locator('dd');
+/** Top and bottom edges measured from the top of the page, so scrolling never changes them. */
+const pageEdges = (target: Locator) =>
+  target.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return { top: r.top + window.scrollY, bottom: r.bottom + window.scrollY };
+  });
 
 async function setCharge(page: Page, label: 'Tax' | 'Other charges (optional)' | 'Tip', mode: 'Percentage' | 'Amount', value: string): Promise<void> {
   const group = page.getByRole('group', { name: label, exact: true });
@@ -113,7 +124,7 @@ async function shareParts(page: Page): Promise<{ items: number; tax: number; oth
 }
 
 /** Two signed-in browser contexts: the group owner (also API-only helper) and a second account. */
-async function twoAccounts(browser: import('@playwright/test').Browser, info: import('@playwright/test').TestInfo) {
+async function twoAccounts(browser: Browser, info: TestInfo) {
   const ownerCtx = await browser.newContext();
   const owner = await ownerCtx.newPage();
   const ownerName = await signUpFast(owner, info, 'own');
@@ -132,28 +143,77 @@ async function twoAccounts(browser: import('@playwright/test').Browser, info: im
   };
 }
 
+/** A browser where nobody is logged in. */
+async function loggedOutVisitor(browser: Browser): Promise<{ page: Page; context: BrowserContext }> {
+  const context = await browser.newContext();
+  return { page: await context.newPage(), context };
+}
+
+// ---------- invites ----------
+
+/** A personal invite code is 12 characters and never contains 0, O, 1 or I. */
+const INVITE_CODE = /^[A-HJ-NP-Z2-9]{12}$/;
+
+interface MemberInfo {
+  id: string;
+  name: string;
+  status: 'current' | 'removed';
+  hasAccount: boolean;
+  isMe: boolean;
+  inviteCode: string | null;
+}
+
+async function memberInfo(page: Page, groupId: string, name: string): Promise<MemberInfo> {
+  const { group } = await api<{ group: { members: MemberInfo[] } }>(page, 'get', `/groups/${groupId}`);
+  const member = group.members.find((m) => m.name === name);
+  if (!member) throw new Error(`"${name}" is not a member of group ${groupId}`);
+  return member;
+}
+
+/** A person's own invite code, as the group's details give it to a member. */
+async function inviteCodeOf(page: Page, groupId: string, name: string): Promise<string> {
+  const { inviteCode } = await memberInfo(page, groupId, name);
+  if (!inviteCode) throw new Error(`"${name}" has no invite code`);
+  return inviteCode;
+}
+
+/** Adds someone from "my other groups" (the same person, so the same invite code). */
+async function addFromOtherGroups(page: Page, groupId: string, name: string): Promise<void> {
+  const { people } = await api<{ people: { key: string; name: string }[] }>(page, 'get', `/people?groupId=${groupId}`);
+  const person = people.find((p) => p.name === name);
+  if (!person) throw new Error(`"${name}" is not among the people in my other groups`);
+  await api(page, 'post', `/groups/${groupId}/members`, { personKey: person.key });
+}
+
+/** Types a code on "Use an invite code" and presses Continue. */
 async function enterInviteCode(page: Page, code: string): Promise<void> {
   await page.goto('/join');
-  await expect(page.getByRole('heading', { level: 1, name: 'Join a group' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: 'Use an invite code' })).toBeVisible();
   await page.getByLabel('Invite code').fill(code);
   await page.getByRole('button', { name: 'Continue' }).click();
 }
 
-async function inviteCodeOf(page: Page, groupId: string): Promise<string> {
-  const { group } = await api<{ group: { inviteCode: string } }>(page, 'get', `/groups/${groupId}`);
-  return group.inviteCode;
+/** Opens /invite/<code> (logged in or out) and waits for the page's heading. */
+async function openInvite(page: Page, code: string, name: string): Promise<void> {
+  await page.goto(`/invite/${code}`);
+  await expect(page.getByRole('heading', { level: 1, name: `${name}, join your friends' groups` })).toBeVisible();
 }
+
+/** One person's row on the Members tab (not the "was added" box). Every row has a "Rename" button. */
+const memberRow = (page: Page, name: string) =>
+  page.getByRole('listitem').filter({ has: page.getByRole('button', { name: `Rename ${name}`, exact: true }) });
 
 // ---------- US-09 create a group ----------
 
-test('US-09 #2 pick a listed currency or "Other" and type "zł"; a note says it cannot be changed later', async ({ page }, info) => {
+test('US-09 #2 pick one of the 13 listed currencies (PKR after Rs) or "Other" and type "zł"; a note says it can be changed later and amounts are not converted', async ({ page }, info) => {
   await signUpFast(page, info);
   await page.goto('/groups/new');
   await expect(page.getByRole('heading', { level: 1, name: 'Create group' })).toBeVisible();
-  await expect(page.getByText("It can't be changed after the group is created.")).toBeVisible();
+  await expect(page.getByText("You can change it later; amounts aren't converted.")).toBeVisible();
+  await expect(page.getByText("can't be changed")).toHaveCount(0);
 
   const select = page.getByLabel('Currency', { exact: true });
-  expect(await select.locator('option').allTextContents()).toEqual(['$', '€', '£', '¥', '₹', 'Rs', '₩', '₺', 'R$', 'CHF', 'AED', 'SAR', 'Other']);
+  expect(await select.locator('option').allTextContents()).toEqual(['$', '€', '£', '¥', '₹', 'Rs', 'PKR', '₩', '₺', 'R$', 'CHF', 'AED', 'SAR', 'Other']);
 
   await page.getByLabel('Group name').fill('Warsaw trip');
   await select.selectOption({ label: 'Other' });
@@ -244,66 +304,437 @@ test('US-10 #2 with 50 current members, adding another shows "A group can have a
   expect(group.members.map((m) => m.name)).not.toContain('Extra');
 });
 
-// ---------- US-12 join by claiming a name ----------
+// ---------- US-11 see and copy a person's own invite ----------
 
-test('US-12 #2 the join page offers a removed, unclaimed name marked "(removed)"', async ({ browser }, info) => {
+test('US-11 #1 each person who has not joined shows their own invite code and a "Copy link" button; people with an account show none', async ({ page }, info) => {
+  const username = await signUpFast(page, info);
+  const { groupId } = await makeGroup(page, 'Invites', '$', ['Omar', 'Sara']);
+  await openGroup(page, groupId, 'Invites', 'members');
+
+  const omarCode = page.getByTestId('invite-code-Omar');
+  const saraCode = page.getByTestId('invite-code-Sara');
+  await expect(omarCode).toHaveText(INVITE_CODE);
+  await expect(saraCode).toHaveText(INVITE_CODE);
+  expect(await omarCode.textContent()).not.toBe(await saraCode.textContent());
+  await expect(memberRow(page, 'Omar')).toContainText(`Invite code ${await omarCode.textContent()}`);
+  await expect(memberRow(page, 'Omar').getByRole('button', { name: 'Copy link for Omar' })).toBeVisible();
+  await expect(memberRow(page, 'Sara').getByRole('button', { name: 'Copy link for Sara' })).toBeVisible();
+
+  // I have an account, so there is nothing to send me, and the group has no code of its own any more.
+  await expect(memberRow(page, username)).toBeVisible();
+  await expect(memberRow(page, username)).not.toContainText('Invite code');
+  await expect(page.getByRole('button', { name: /^Copy link for / })).toHaveCount(2);
+  await expect(page.getByTestId('invite-code')).toHaveCount(0);
+  const { group } = await api<{ group: Record<string, unknown> & { members: { name: string; inviteCode: string | null }[] } }>(
+    page,
+    'get',
+    `/groups/${groupId}`,
+  );
+  expect(group).not.toHaveProperty('inviteCode');
+  expect(group.members.map((m) => [m.name, m.inviteCode !== null])).toEqual([[username, false], ['Omar', true], ['Sara', true]]);
+});
+
+test('US-11 #1 right after adding Omar, a box offers his own invite link with the same code and a "Copy link" button', async ({ page }, info) => {
+  await signUpFast(page, info);
+  const { groupId } = await makeGroup(page, 'Fresh add', '$', []);
+  await openGroup(page, groupId, 'Fresh add', 'members');
+  await page.getByLabel('Add a friend by name').fill('Omar');
+  await page.getByRole('button', { name: 'Add member' }).click();
+
+  const box = page.getByRole('region', { name: 'Invite Omar' });
+  await expect(box).toBeVisible();
+  await expect(box).toContainText('Omar was added. Send them their own invite link');
+  const code = await inviteCodeOf(page, groupId, 'Omar');
+  await expect(box.getByTestId('invite-code-Omar')).toHaveText(code);
+  await expect(box.getByRole('button', { name: 'Copy link for Omar' })).toBeVisible();
+  await expect(memberRow(page, 'Omar').getByTestId('invite-code-Omar')).toHaveText(code);
+});
+
+test('US-11 #1 where the device can share, each person also has a "Share invite for <name>" button that shares their link', async ({ page }, info) => {
+  await page.addInitScript(() => {
+    type Shared = { title?: string; text?: string; url?: string };
+    const w = window as unknown as { __shared: Shared[] };
+    w.__shared = [];
+    Object.defineProperty(navigator, 'share', {
+      configurable: true,
+      value: (data: Shared) => {
+        w.__shared.push(data);
+        return Promise.resolve();
+      },
+    });
+  });
+  await signUpFast(page, info);
+  const { groupId } = await makeGroup(page, 'Sharing', '$', ['Omar', 'Sara']);
+  const code = await inviteCodeOf(page, groupId, 'Omar');
+  await openGroup(page, groupId, 'Sharing', 'members');
+  await expect(page.getByRole('button', { name: /^Share invite for / })).toHaveCount(2);
+
+  await memberRow(page, 'Omar').getByRole('button', { name: 'Share invite for Omar' }).click();
+  const shared = await page.evaluate(() => (window as unknown as { __shared: { text?: string; url?: string }[] }).__shared);
+  expect(shared).toHaveLength(1);
+  expect(shared[0].url).toBe(`${new URL(page.url()).origin}/invite/${code}`);
+  expect(shared[0].text).toContain('Omar');
+});
+
+test('US-11 #1 where the device cannot share, there is no Share button, only the code and "Copy link"', async ({ page }, info) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'share', { configurable: true, value: undefined });
+  });
+  await signUpFast(page, info);
+  const { groupId } = await makeGroup(page, 'No sharing', '$', ['Omar']);
+  await openGroup(page, groupId, 'No sharing', 'members');
+  await expect(page.getByTestId('invite-code-Omar')).toHaveText(INVITE_CODE);
+  await expect(page.getByRole('button', { name: 'Copy link for Omar' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Share invite for / })).toHaveCount(0);
+});
+
+test("US-11 #2 \"Copy link\" copies Omar's link, ready to paste", async ({ page, context, browserName }, info) => {
+  await signUpFast(page, info);
+  const { groupId } = await makeGroup(page, 'Copying', '$', ['Omar']);
+  const code = await inviteCodeOf(page, groupId, 'Omar');
+  if (browserName === 'chromium') await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  await openGroup(page, groupId, 'Copying', 'members');
+  await page.getByRole('button', { name: 'Copy link for Omar' }).click();
+  await expect(page.getByRole('button', { name: 'Copied for Omar' })).toBeVisible();
+  // Only Chromium lets a test read the clipboard back.
+  if (browserName === 'chromium') {
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`${new URL(page.url()).origin}/invite/${code}`);
+  }
+});
+
+test("US-11 #3 there is no way to regenerate or change a person's invite code: it stays the same", async ({ page }, info) => {
+  await signUpFast(page, info);
+  const { groupId, ids } = await makeGroup(page, 'Stable', '$', ['Omar']);
+  await openGroup(page, groupId, 'Stable', 'members');
+  const shown = (await page.getByTestId('invite-code-Omar').textContent()) ?? '';
+  expect(shown).toMatch(INVITE_CODE);
+  await expect(page.getByRole('button', { name: /regenerate|new code|change code|reset code/i })).toHaveCount(0);
+
+  // The same code after a reload, and after Omar is renamed.
+  await page.reload();
+  await expect(page.getByTestId('invite-code-Omar')).toHaveText(shown);
+  await api(page, 'put', `/groups/${groupId}/members/${ids.Omar}`, { name: 'Omar K' });
+  expect(await inviteCodeOf(page, groupId, 'Omar K')).toBe(shown);
+});
+
+// ---------- US-12 join with a personal invite ----------
+
+test('US-12 #1 a signed-in friend opens their own invite and one click links the group, with its full history', async ({ browser }, info) => {
   const { owner, other, close } = await twoAccounts(browser, info);
   try {
-    const { groupId, ids } = await makeGroup(owner, 'Joiners', '$', ['Omar', 'Sara']);
-    await api(owner, 'post', `/groups/${groupId}/members/${ids.Omar}/remove`);
-    await enterInviteCode(other, await inviteCodeOf(owner, groupId));
-    await expect(other.getByRole('heading', { level: 2, name: /Which name is you/ })).toBeVisible();
-    await expect(other.getByRole('radio', { name: "I'm Omar (removed)" })).toBeVisible();
-    await expect(other.getByRole('radio', { name: "I'm Sara", exact: true })).toBeVisible();
-    await expect(other.getByRole('radio')).toHaveCount(2);
-    await expect(other.getByText('(removed)')).toHaveCount(1);
+    const { groupId, meId, ids } = await makeGroup(owner, 'Joiners', '$', ['Omar']);
+    await postBill(owner, groupId, billBody([meId, ids.Omar], meId, ['20.00'], { name: 'Pizza night' }));
+
+    await openInvite(other, await inviteCodeOf(owner, groupId, 'Omar'), 'Omar');
+    await other.getByRole('button', { name: 'Join these groups' }).click();
+    await expect(other.getByRole('heading', { level: 1, name: 'Dashboard' })).toBeVisible();
+    await expect(other.getByRole('status').getByText('You joined 1 group')).toBeVisible();
+
+    // The group is in their list, under the name their friends used, with everything that happened so far.
+    await other.goto('/groups');
+    await expect(other.getByRole('heading', { level: 1, name: 'Groups', exact: true })).toBeVisible();
+    await other.getByRole('link', { name: /Joiners/ }).click();
+    await expect(other.getByRole('heading', { level: 1, name: 'Joiners', exact: true })).toBeVisible();
+    await expect(balanceRow(other, 'Omar')).toContainText('(you)');
+    await expect(other.getByRole('link', { name: /Pizza night/ })).toBeVisible();
+    await other.getByRole('tab', { name: 'Activity' }).click();
+    await expect(other.getByTestId('activity').first()).toHaveText(/^Omar joined with their invite/);
+    await expect(other.getByTestId('activity')).toHaveCount(4);
   } finally {
     await close();
   }
 });
 
-test('US-12 #5 the join page has no way to type a new name, only radio choices of existing names', async ({ browser }, info) => {
+test("US-12 #2 the invite page greets the person by name and lists only the groups they are in, never other names", async ({ browser }, info) => {
+  const { owner, ownerName, close } = await twoAccounts(browser, info);
+  const visitor = await loggedOutVisitor(browser);
+  try {
+    const beach = await makeGroup(owner, 'Beach trip', '$', ['Omar']);
+    const flat = await makeGroup(owner, 'Flat share', '$', ['Sara']);
+    await addFromOtherGroups(owner, flat.groupId, 'Omar');
+    await makeGroup(owner, 'Not his', '$', ['Sara']);
+
+    await openInvite(visitor.page, await inviteCodeOf(owner, beach.groupId, 'Omar'), 'Omar');
+    await expect(visitor.page.getByText("You're in:")).toBeVisible();
+    await expect(visitor.page.getByRole('listitem')).toHaveText(['Beach trip', 'Flat share']);
+    // No other names: not the owner's, not Sara's, and no names to pick from.
+    await expect(visitor.page.getByText('Sara')).toHaveCount(0);
+    await expect(visitor.page.getByText(ownerName)).toHaveCount(0);
+    await expect(visitor.page.getByText('Not his')).toHaveCount(0);
+  } finally {
+    await close();
+    await visitor.context.close();
+  }
+});
+
+test('US-12 #3 once used, the invite says "This invite has already been used" to everyone, and nobody else can take that place', async ({ browser }, info) => {
   const { owner, other, close } = await twoAccounts(browser, info);
+  const strangerCtx = await browser.newContext();
+  const stranger = await strangerCtx.newPage();
+  const visitor = await loggedOutVisitor(browser);
+  try {
+    await signUpFast(stranger, info, 'str');
+    const { groupId } = await makeGroup(owner, 'Taken', '$', ['Omar']);
+    const code = await inviteCodeOf(owner, groupId, 'Omar');
+    await api(other, 'post', `/invites/${code}/accept`);
+
+    for (const page of [stranger, visitor.page, owner]) {
+      await page.goto(`/invite/${code}`);
+      await expect(page.getByRole('alert')).toHaveText('This invite has already been used');
+      await expect(page.getByRole('button', { name: /join/i })).toHaveCount(0);
+    }
+    // The stranger got nothing from it, not even by asking the server directly.
+    await expect(api(stranger, 'post', `/invites/${code}/accept`)).rejects.toThrow('409');
+    await expect(api(stranger, 'get', `/groups/${groupId}`)).rejects.toThrow('403');
+    const { groups } = await api<{ groups: unknown[] }>(stranger, 'get', '/groups');
+    expect(groups).toEqual([]);
+  } finally {
+    await close();
+    await strangerCtx.close();
+    await visitor.context.close();
+  }
+});
+
+test("US-12 #4 an account already in one of the person's groups still joins the others, and that one group is skipped", async ({ browser }, info) => {
+  const { owner, other, close } = await twoAccounts(browser, info);
+  try {
+    const groupA = await makeGroup(owner, 'Group A', '$', ['Omar', 'Pat']);
+    const groupB = await makeGroup(owner, 'Group B', '$', []);
+    await addFromOtherGroups(owner, groupB.groupId, 'Omar');
+    // The second account is already in Group A, as Pat.
+    await api(other, 'post', `/invites/${await inviteCodeOf(owner, groupA.groupId, 'Pat')}/accept`);
+
+    await openInvite(other, await inviteCodeOf(owner, groupA.groupId, 'Omar'), 'Omar');
+    // Not all of the groups are theirs yet, so this may be their invite: they can join, after
+    // a warning that they're already in Group A, and a confirmation.
+    await expect(other.getByText("You're already in Group A. If you're not Omar, don't join: send them this link instead.")).toBeVisible();
+    await other.getByRole('button', { name: 'Join these groups' }).click();
+    const confirm = other.getByRole('dialog', { name: 'Join as Omar?' });
+    await expect(confirm).toBeVisible();
+    await confirm.getByRole('button', { name: 'Join as Omar' }).click();
+    await expect(other.getByRole('heading', { level: 1, name: 'Dashboard' })).toBeVisible();
+    // The skipped group is reported.
+    await expect(other.getByRole('status').getByText('You joined 1 group. You were already in Group A, so it was skipped.')).toBeVisible();
+
+    // Group B is linked; in Group A they stay Pat.
+    await openGroup(other, groupB.groupId, 'Group B');
+    await expect(balanceRow(other, 'Omar')).toContainText('(you)');
+    await openGroup(other, groupA.groupId, 'Group A');
+    await expect(balanceRow(other, 'Pat')).toContainText('(you)');
+    await expect(other.getByTestId('balance-row').filter({ hasText: '(you)' })).toHaveCount(1);
+  } finally {
+    await close();
+  }
+});
+
+test('US-12 #5 the invite page has no list of names to pick from and no way to type a new name', async ({ browser }, info) => {
+  const { owner, other, close } = await twoAccounts(browser, info);
+  const visitor = await loggedOutVisitor(browser);
   try {
     const { groupId } = await makeGroup(owner, 'Closed list', '$', ['Omar', 'Sara']);
-    await enterInviteCode(other, await inviteCodeOf(owner, groupId));
-    await expect(other.getByRole('heading', { level: 2, name: /Which name is you/ })).toBeVisible();
-    await expect(other.getByRole('radio')).toHaveCount(2);
-    // The only text box on the page is the invite code.
-    await expect(other.getByRole('textbox')).toHaveCount(1);
-    await expect(other.getByRole('textbox')).toHaveAccessibleName('Invite code');
-    await expect(other.getByLabel(/name/i).and(other.locator('input[type="text"], input:not([type]), textarea'))).toHaveCount(0);
-    await expect(other.getByRole('button', { name: /add (me|myself|name)/i })).toHaveCount(0);
+    const code = await inviteCodeOf(owner, groupId, 'Omar');
+
+    // Logged out: only the two ways in, and a username and password for the account.
+    await openInvite(visitor.page, code, 'Omar');
+    await expect(visitor.page.getByRole('radio')).toHaveCount(2);
+    await expect(visitor.page.getByRole('radio', { name: "I'm new here" })).toBeVisible();
+    await expect(visitor.page.getByRole('radio', { name: 'I have an account' })).toBeVisible();
+    await expect(visitor.page.getByRole('textbox')).toHaveCount(2);
+    await expect(visitor.page.getByRole('textbox', { name: 'Username' })).toHaveCount(1);
+    await expect(visitor.page.getByRole('textbox', { name: 'Password', exact: true })).toHaveCount(1);
+    await expect(visitor.page.getByText(/Which name is you/)).toHaveCount(0);
+    await expect(visitor.page.getByRole('radio', { name: /^I'm (Omar|Sara)/ })).toHaveCount(0);
+    await expect(visitor.page.getByRole('button', { name: /add (me|myself|name)/i })).toHaveCount(0);
+
+    // Logged in: a single button, nothing to pick or type.
+    await openInvite(other, code, 'Omar');
+    await expect(other.getByRole('button')).toHaveText(['Join these groups']);
+    await expect(other.getByRole('textbox')).toHaveCount(0);
+    await expect(other.getByRole('radio')).toHaveCount(0);
+  } finally {
+    await close();
+    await visitor.context.close();
+  }
+});
+
+test('US-12 #6 an invite also links a group the person was removed from, but they stay removed there until someone restores them', async ({ browser }, info) => {
+  const { owner, other, close } = await twoAccounts(browser, info);
+  try {
+    const stillIn = await makeGroup(owner, 'Still in', '$', ['Omar']);
+    const left = await makeGroup(owner, 'Left earlier', '$', []);
+    await addFromOtherGroups(owner, left.groupId, 'Omar');
+    const omarInLeft = await memberInfo(owner, left.groupId, 'Omar');
+    await api(owner, 'post', `/groups/${left.groupId}/members/${omarInLeft.id}/remove`);
+
+    // The invite lists only the group Omar is in now; joining links the other one quietly.
+    await openInvite(other, await inviteCodeOf(owner, stillIn.groupId, 'Omar'), 'Omar');
+    await expect(other.getByRole('listitem')).toHaveText(['Still in']);
+    await other.getByRole('button', { name: 'Join these groups' }).click();
+    await expect(other.getByRole('heading', { level: 1, name: 'Dashboard' })).toBeVisible();
+    await expect(other.getByRole('status').getByText('You joined 1 group')).toBeVisible();
+
+    await other.goto(`/groups/${left.groupId}`);
+    await expect(other.getByRole('alert')).toHaveText('You no longer have access to this group');
+    await openGroup(other, stillIn.groupId, 'Still in');
+
+    // Only Restore brings Omar back.
+    await openGroup(owner, left.groupId, 'Left earlier', 'members');
+    await expect(owner.getByText('Omar (removed)')).toBeVisible();
+    await owner.getByRole('button', { name: 'Restore Omar' }).click();
+    await expect(owner.getByRole('status').getByText('Member restored')).toBeVisible();
+    await openGroup(other, left.groupId, 'Left earlier');
+    await expect(balanceRow(other, 'Omar')).toContainText('(you)');
   } finally {
     await close();
   }
 });
 
-test('US-12 #8 a current member entering the code sees "You\'re already in this group" and nothing changes', async ({ page }, info) => {
+test('US-12 #7 a wrong code shows "Invite not found" with a clear message and joins nothing', async ({ page }, info) => {
   await signUpFast(page, info);
+  await enterInviteCode(page, 'WRONGCODE');
+  await expect(page.getByRole('heading', { level: 1, name: 'Invite not found' })).toBeVisible();
+  await expect(page.getByRole('alert')).toHaveText("That invite link isn't valid. Check the code and try again.");
+  await expect(page.getByRole('button', { name: /join/i })).toHaveCount(0);
+  const { groups } = await api<{ groups: unknown[] }>(page, 'get', '/groups');
+  expect(groups).toEqual([]);
+  await page.getByRole('link', { name: 'Go to Bill Splitter' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Dashboard' })).toBeVisible();
+});
+
+test('US-12 #8 a current member opening a friend\'s invite sees "This invite is for Omar" and no Join button, and nothing changes', async ({ page }, info) => {
+  const username = await signUpFast(page, info);
   const { groupId } = await makeGroup(page, 'Already in', '$', ['Omar']);
+  const code = await inviteCodeOf(page, groupId, 'Omar');
   const before = await api<{ group: { members: unknown[] } }>(page, 'get', `/groups/${groupId}`);
-  await enterInviteCode(page, await inviteCodeOf(page, groupId));
-  await expect(page.getByRole('alert')).toHaveText("You're already in this group");
-  await expect(page.getByRole('button', { name: 'Join group' })).toHaveCount(0);
+
+  await enterInviteCode(page, code);
+  await expect(page.getByRole('heading', { level: 1, name: "Omar, join your friends' groups" })).toBeVisible();
+  const note = page.getByRole('status').filter({ hasText: 'This invite is for Omar' });
+  await expect(note).toHaveText(`You're already in this group as ${username}. This invite is for Omar: send them the link so they can join.`);
+  await expect(page.getByRole('button', { name: 'Join these groups' })).toHaveCount(0);
+
   const after = await api<{ group: { members: unknown[] } }>(page, 'get', `/groups/${groupId}`);
   expect(after.group.members).toEqual(before.group.members);
   const { activity } = await api<{ activity: { message: string }[] }>(page, 'get', `/groups/${groupId}/activity`);
-  expect(activity.filter((a) => /claimed|rejoined/.test(a.message))).toEqual([]);
+  expect(activity.filter((a) => /joined/.test(a.message))).toEqual([]);
+  // The server refuses it as well, and the code is still Omar's.
+  await expect(api(page, 'post', `/invites/${code}/accept`)).rejects.toThrow('409');
+  expect(await inviteCodeOf(page, groupId, 'Omar')).toBe(code);
+});
+
+test('US-12 #9 after a wrong code, entering the right one works without reloading the page', async ({ page }, info) => {
+  await signUpFast(page, info);
+  const { groupId } = await makeGroup(page, 'Second try', '$', ['Omar']);
+  const code = await inviteCodeOf(page, groupId, 'Omar');
+  await page.getByRole('link', { name: 'Groups' }).first().click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Groups', exact: true })).toBeVisible();
+  // A marker that only survives while the page is not reloaded.
+  await page.evaluate(() => {
+    (window as unknown as { __kept: boolean }).__kept = true;
+  });
+
+  await page.getByRole('link', { name: 'Use an invite code' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Use an invite code' })).toBeVisible();
+  await page.getByLabel('Invite code').fill('WRONGCODE');
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Invite not found' })).toBeVisible();
+
+  await page.getByRole('link', { name: 'Go to Bill Splitter' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Dashboard' })).toBeVisible();
+  await page.getByRole('link', { name: 'Groups' }).first().click();
+  await page.getByRole('link', { name: 'Use an invite code' }).click();
+  await page.getByLabel('Invite code').fill(code);
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: "Omar, join your friends' groups" })).toBeVisible();
+  expect(await page.evaluate(() => (window as unknown as { __kept?: boolean }).__kept)).toBe(true);
 });
 
 // ---------- US-13 equal-split bills ----------
 
-test('US-13 #3 items 90.00 + 10% other charges between 3 people: other charges $9.00, total $99.00, each $33.00', async ({ page }, info) => {
+test('US-13 #3 items 90.00 + 10% other charges between 3 people: "Other charges (10%)" $9.00, total $99.00, each $33.00', async ({ page }, info) => {
   await signUpFast(page, info);
   const { groupId } = await makeGroup(page, 'Three', '$', ['Ali', 'Sara']);
   await openNewBill(page, groupId);
   await page.getByLabel('Item 1 price').fill('90.00');
   await setCharge(page, 'Other charges (optional)', 'Percentage', '10');
   await calculate(page);
-  await expect(totalsRow(page, 'Other charges')).toHaveText('$9.00');
+  await expect(totalsRow(page, 'Other charges (10%)')).toHaveText('$9.00');
   await expect(page.getByTestId('grand-total')).toHaveText('$99.00');
   await expect(shareAmounts(page)).toHaveText(['$33.00', '$33.00', '$33.00']);
+});
+
+test('US-13 #3 each results line shows the rate behind it: "Tax (5%)", "Other charges (10%)", "Tip (15% of items)", and "of items + tax" when chosen', async ({ page }, info) => {
+  await signUpFast(page, info);
+  const { groupId } = await makeGroup(page, 'Rates', '$', ['Ali']);
+  await openNewBill(page, groupId);
+  await page.getByLabel('Item 1 price').fill('100.00');
+  await setCharge(page, 'Tax', 'Percentage', '5');
+  await setCharge(page, 'Other charges (optional)', 'Percentage', '10');
+  await setCharge(page, 'Tip', 'Percentage', '15');
+  await calculate(page);
+  await expect(totalsRow(page, 'Subtotal')).toHaveText('$100.00');
+  await expect(totalsRow(page, 'Tax (5%)')).toHaveText('$5.00');
+  await expect(totalsRow(page, 'Other charges (10%)')).toHaveText('$10.00');
+  await expect(totalsRow(page, 'Tip (15% of items)')).toHaveText('$15.00');
+  await expect(page.getByTestId('grand-total')).toHaveText('$130.00');
+
+  // Tip on items + tax: 15% of 105.00 is 15.75.
+  await page.getByRole('radio', { name: 'Items + tax' }).check();
+  await calculate(page);
+  await expect(totalsRow(page, 'Tip (15% of items + tax)')).toHaveText('$15.75');
+  await expect(page.getByTestId('grand-total')).toHaveText('$130.75');
+});
+
+test('US-13 #3 charges entered as amounts show no rate on their results lines', async ({ page }, info) => {
+  await signUpFast(page, info);
+  const { groupId } = await makeGroup(page, 'Plain amounts', '$', ['Ali']);
+  await openNewBill(page, groupId);
+  await page.getByLabel('Item 1 price').fill('100.00');
+  await setCharge(page, 'Tax', 'Amount', '5.00');
+  await setCharge(page, 'Other charges (optional)', 'Amount', '10.00');
+  await setCharge(page, 'Tip', 'Amount', '15.00');
+  await calculate(page);
+  await expect(totalsRow(page, 'Tax')).toHaveText('$5.00');
+  await expect(totalsRow(page, 'Other charges')).toHaveText('$10.00');
+  await expect(totalsRow(page, 'Tip')).toHaveText('$15.00');
+  await expect(page.locator('dl.totals .rate')).toHaveCount(0);
+  await expect(page.getByTestId('grand-total')).toHaveText('$130.00');
+});
+
+test('US-13 the tax, other-charges and tip boxes start empty and blank counts as 0; typing 5 shows "5", not "05"', async ({ page }, info) => {
+  await signUpFast(page, info);
+  const { groupId } = await makeGroup(page, 'Blank boxes', '$', ['Ali']);
+  await openNewBill(page, groupId);
+  const box = (label: 'Tax' | 'Other charges (optional)' | 'Tip') => page.getByRole('group', { name: label, exact: true }).getByRole('textbox');
+  for (const label of ['Tax', 'Other charges (optional)', 'Tip'] as const) await expect(box(label)).toHaveValue('');
+  await expect(box('Tax')).toHaveAttribute('placeholder', '0');
+  await expect(box('Tip')).toHaveAttribute('placeholder', '0');
+
+  await box('Tax').pressSequentially('5');
+  await expect(box('Tax')).toHaveValue('5');
+  await box('Tax').fill('');
+
+  // Left blank, they count as 0.
+  await page.getByLabel('Item 1 price').fill('40.00');
+  await calculate(page);
+  await expect(page.getByTestId('grand-total')).toHaveText('$40.00');
+  await expect(totalsRow(page, 'Subtotal')).toHaveText('$40.00');
+  await expect(shareAmounts(page)).toHaveText(['$20.00', '$20.00']);
+});
+
+test('US-13 the "Save bill" button sits below the results, both before and after Calculate', async ({ page }, info) => {
+  await signUpFast(page, info);
+  const { groupId } = await makeGroup(page, 'Save bar', '$', ['Ali']);
+  await openNewBill(page, groupId);
+  const results = page.getByRole('region', { name: 'Results' });
+  const save = page.getByRole('button', { name: 'Save bill' });
+  await expect(results).toContainText('Press Calculate to see results');
+  expect((await pageEdges(save)).top).toBeGreaterThanOrEqual((await pageEdges(results)).bottom);
+
+  await page.getByLabel('Item 1 price').fill('12.00');
+  await calculate(page);
+  await expect(page.getByTestId('grand-total')).toHaveText('$12.00');
+  expect((await pageEdges(save)).top).toBeGreaterThanOrEqual((await pageEdges(results)).bottom);
 });
 
 test('US-13 #4 items 10.00 + 0.01 other charges between 2 people: total $10.01, shares $5.01 and $5.00', async ({ page }, info) => {
@@ -327,7 +758,7 @@ test('US-13 #5 a grand total of 0.01 between 2 people gives shares $0.01 and $0.
   await expect(shareAmounts(page)).toHaveText(['$0.01', '$0.00']);
 });
 
-test('US-13 #6 items 1,000,000.00 + 100% tip between 50 people: total $2,000,000.00, each share $40,000.00', async ({ page }, info) => {
+test('US-13 #6 items 1,000,000.00 + 100% tip between 50 people: "Tip (100% of items)", total $2,000,000.00, each share $40,000.00', async ({ page }, info) => {
   test.setTimeout(90_000);
   await signUpFast(page, info);
   const { groupId } = await makeGroup(
@@ -342,7 +773,7 @@ test('US-13 #6 items 1,000,000.00 + 100% tip between 50 people: total $2,000,000
   await setCharge(page, 'Tip', 'Percentage', '100');
   await calculate(page);
   await expect(totalsRow(page, 'Subtotal')).toHaveText('$1,000,000.00');
-  await expect(totalsRow(page, 'Tip')).toHaveText('$1,000,000.00');
+  await expect(totalsRow(page, 'Tip (100% of items)')).toHaveText('$1,000,000.00');
   await expect(page.getByTestId('grand-total')).toHaveText('$2,000,000.00');
   await expect(shareAmounts(page)).toHaveText(Array<string>(50).fill('$40,000.00'));
 });
@@ -637,7 +1068,7 @@ test('US-16 #5 a removed member is absent from the balance rows and the suggesti
   await expect(page.getByText('Omar (removed)')).toBeVisible();
 });
 
-test('US-16 #6 balances and suggestions at the top, "Add bill" visible, then the tabs Bills, Settle-ups, Members, Activity; invite code and Removed members are on Members', async ({ page }, info) => {
+test('US-16 #6 balances and suggestions at the top, "Add bill" and "Edit group" visible, then the tabs Bills, Settle-ups, Members, Activity; invite codes and Removed members are on Members', async ({ page }, info) => {
   await signUpFast(page, info);
   const { groupId } = await makeGroup(page, 'Layout', '$', ['Ali']);
   await openGroup(page, groupId, 'Layout');
@@ -645,21 +1076,25 @@ test('US-16 #6 balances and suggestions at the top, "Add bill" visible, then the
   const balances = page.getByRole('region', { name: 'Balances' });
   const suggested = page.getByRole('region', { name: 'Suggested payments' });
   const addBill = page.getByRole('link', { name: 'Add bill' }).first();
+  const editGroup = page.getByRole('link', { name: 'Edit group' });
   const tabList = page.getByRole('tablist', { name: 'Group sections' });
   await expect(balances).toBeInViewport();
   await expect(suggested).toBeInViewport();
   await expect(addBill).toBeVisible();
   await expect(addBill).toBeInViewport();
+  await expect(editGroup).toBeVisible();
+  await expect(editGroup).toBeInViewport();
 
   const box = async (l: Locator) => {
     const b = await l.boundingBox();
     if (!b) throw new Error('element has no box');
     return b;
   };
-  const [bal, sug, add, tabs] = [await box(balances), await box(suggested), await box(addBill), await box(tabList)];
+  const [bal, sug, add, edit, tabs] = [await box(balances), await box(suggested), await box(addBill), await box(editGroup), await box(tabList)];
   expect(bal.y + bal.height).toBeLessThanOrEqual(tabs.y);
   expect(sug.y + sug.height).toBeLessThanOrEqual(tabs.y);
   expect(add.y + add.height).toBeLessThanOrEqual(tabs.y);
+  expect(edit.y + edit.height).toBeLessThanOrEqual(tabs.y);
 
   const tabNodes = page.getByRole('tab');
   expect(await tabNodes.allTextContents()).toEqual(['Bills', 'Settle-ups', 'Members', 'Activity']);
@@ -671,11 +1106,11 @@ test('US-16 #6 balances and suggestions at the top, "Add bill" visible, then the
     lastX = b.x;
   }
 
-  // The invite code and Removed members are not on the page until the Members tab is opened.
-  await expect(page.getByTestId('invite-code')).toHaveCount(0);
+  // The invite codes and Removed members are not on the page until the Members tab is opened.
+  await expect(page.getByTestId('invite-code-Ali')).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'Removed members' })).toHaveCount(0);
   await page.getByRole('tab', { name: 'Members' }).click();
-  await expect(page.getByTestId('invite-code')).toBeVisible();
+  await expect(page.getByTestId('invite-code-Ali')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Removed members' })).toBeVisible();
 });
 
@@ -872,22 +1307,21 @@ test('US-19 #4 every activity entry shows who made the change and a time', async
   ]);
 });
 
-test('US-19 #5 a member who joined by claiming a name can open the Activity tab and sees every entry, including "X created the group"', async ({ browser }, info) => {
+test('US-19 #5 a member who joined with their personal invite can open the Activity tab and sees every entry, including "X created the group"', async ({ browser }, info) => {
   const { owner, other, ownerName, close } = await twoAccounts(browser, info);
   try {
     const { groupId, meId, ids } = await makeGroup(owner, 'Shared log', '$', ['Omar']);
     await postBill(owner, groupId, billBody([meId, ids.Omar], meId, ['20.00'], { name: 'Pizza night' }));
 
-    await enterInviteCode(other, await inviteCodeOf(owner, groupId));
-    await other.getByText("I'm Omar").click();
-    await other.getByRole('button', { name: 'Join group' }).click();
-    await expect(other.getByRole('heading', { level: 1, name: 'Shared log' })).toBeVisible();
+    await openInvite(other, await inviteCodeOf(owner, groupId, 'Omar'), 'Omar');
+    await other.getByRole('button', { name: 'Join these groups' }).click();
+    await expect(other.getByRole('heading', { level: 1, name: 'Dashboard' })).toBeVisible();
 
-    await other.getByRole('tab', { name: 'Activity' }).click();
+    await openGroup(other, groupId, 'Shared log', 'activity');
     const entries = other.getByTestId('activity');
     await expect(entries).toHaveCount(4);
     await expect(entries).toContainText([
-      'Omar claimed the name Omar',
+      'Omar joined with their invite',
       `${ownerName} added 'Pizza night' (20.00)`,
       `${ownerName} added Omar`,
       `${ownerName} created the group`,

@@ -3,8 +3,9 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import type { FieldErrors } from '../../shared/bill.js';
 import type { SoloBillDetail, SoloBillSummary } from '../../shared/api.js';
 import { ApiError, api } from '../api.js';
-import { calculate, chosenCurrency, emptyBill, focusFirstError, fromInput, revealResults, stripKeys, toBillInput, type BillFormState, type CalcResult } from '../billEditor.js';
-import { useBusy, useLoad } from '../hooks.js';
+import { calculate, chosenCurrency, emptyBill, focusFirstError, fromInput, rateLabels, revealResults, stripKeys, toBillInput, type BillFormState, type CalcResult } from '../billEditor.js';
+import { clearFieldError, withoutKey } from '../fieldErrors.js';
+import { useBusy, useFocusFirstError, useLoad } from '../hooks.js';
 import { BillForm } from '../components/BillForm.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import { CurrencyPicker } from '../components/CurrencyPicker.js';
@@ -87,10 +88,13 @@ function SoloBillEditor({ saved, onSavedEdit }: { saved: SoloBillDetail | null; 
   const [errors, setErrors] = useState<FieldErrors>({});
   const [result, setResult] = useState<CalcResult | null>(saved ? { totals: saved.totals, shares: null } : null);
   const [pageError, setPageError] = useState('');
+  // Problems with Delete show at the top, next to the button that caused them.
+  const [headerError, setHeaderError] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
   const { busy, run } = useBusy();
   const formRef = useRef<HTMLFormElement>(null);
   const resultsRef = useRef<HTMLElement>(null);
+  const focusErrors = useFocusFirstError(formRef);
   const dirty = JSON.stringify(stripKeys(state)) !== snapshot;
   const guard = useUnsavedGuard(dirty);
   const currency = saved ? saved.currency : chosenCurrency(state);
@@ -139,13 +143,15 @@ function SoloBillEditor({ saved, onSavedEdit }: { saved: SoloBillDetail | null; 
       } catch (err) {
         const e = err as ApiError;
         setErrors(e.fields);
-        setPageError(Object.keys(e.fields).length ? '' : e.message);
+        setPageError(e.message);
+        if (Object.keys(e.fields).length) focusErrors();
       }
     });
 
   const onDelete = () =>
     run(async () => {
       if (!saved) return;
+      setHeaderError('');
       try {
         await api.del(`/solo-bills/${saved.id}`);
         guard.allowLeave();
@@ -154,7 +160,7 @@ function SoloBillEditor({ saved, onSavedEdit }: { saved: SoloBillDetail | null; 
         navigate('/solo', { replace: true });
       } catch (err) {
         setConfirmDelete(false);
-        setPageError((err as ApiError).message);
+        setHeaderError((err as ApiError).message);
       }
     });
 
@@ -167,6 +173,7 @@ function SoloBillEditor({ saved, onSavedEdit }: { saved: SoloBillDetail | null; 
           </button>
         )}
       </PageHeader>
+      <Alert>{headerError}</Alert>
       <form
         ref={formRef}
         className="card stack"
@@ -176,7 +183,6 @@ function SoloBillEditor({ saved, onSavedEdit }: { saved: SoloBillDetail | null; 
           onCalculate();
         }}
       >
-        <Alert>{pageError}</Alert>
         {saved ? (
           <div className="field">
             <span className="field-label">Currency</span>
@@ -189,21 +195,27 @@ function SoloBillEditor({ saved, onSavedEdit }: { saved: SoloBillDetail | null; 
             choice={state.currencyChoice}
             custom={state.customCurrency}
             note="Only changes the symbol shown; nothing is converted. It can't be changed after you save."
-            onChange={(currencyChoice, customCurrency) => change({ ...state, currencyChoice, customCurrency })}
+            onChange={(currencyChoice, customCurrency) => {
+              setErrors((e) => withoutKey(e, 'currency'));
+              change({ ...state, currencyChoice, customCurrency });
+            }}
             error={errors.currency}
           />
         )}
-        <BillForm kind="solo" state={state} onChange={change} errors={errors} />
+        <BillForm kind="solo" state={state} onChange={change} errors={errors} onFieldEdit={(key) => setErrors((e) => clearFieldError(e, key))} />
         <div className="form-actions">
           <button type="submit" className="btn btn-primary">
             Calculate
           </button>
-          <button type="button" className="btn btn-secondary" onClick={() => void onSave()} disabled={busy}>
-            {busy ? 'Saving…' : 'Save bill'}
-          </button>
         </div>
       </form>
-      <Results ref={resultsRef} result={result} currency={currency.trim() || '$'} />
+      <Results ref={resultsRef} result={result} currency={currency.trim() || '$'} rates={rateLabels(state)} />
+      <div className="save-bar">
+        <Alert>{pageError}</Alert>
+        <button type="button" className="btn btn-primary" onClick={() => void onSave()} disabled={busy}>
+          {busy ? 'Saving…' : 'Save bill'}
+        </button>
+      </div>
       {guard.dialog}
       <ConfirmDialog
         open={confirmDelete}

@@ -7,7 +7,7 @@ const LINKS = [
   { to: '/', label: 'Dashboard', end: true },
   { to: '/solo', label: 'Solo bills', end: false },
   { to: '/groups', label: 'Groups', end: false },
-  { to: '/account', label: 'Account', end: false },
+  { to: '/settings', label: 'Settings', end: false },
 ];
 
 /** The app's mark: a small receipt with a torn edge. Decorative. */
@@ -144,7 +144,7 @@ export function PublicLayout() {
       <div className="public-intro">
         <div className="brand brand-large">
           <Logo />
-          <span>Bill Splitting Calculator</span>
+          <span>Bill Splitter</span>
         </div>
         <p className="public-lede">Split any bill to the exact cent, then keep a running tab with friends.</p>
         <div className="sample-receipt" aria-hidden="true">

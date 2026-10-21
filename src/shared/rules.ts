@@ -3,7 +3,7 @@
 export const MAX_ITEMS = 200;
 export const MAX_GROUP_MEMBERS = 50;
 
-export const CURRENCIES = ['$', '€', '£', '¥', '₹', 'Rs', '₩', '₺', 'R$', 'CHF', 'AED', 'SAR'] as const;
+export const CURRENCIES = ['$', '€', '£', '¥', '₹', 'Rs', 'PKR', '₩', '₺', 'R$', 'CHF', 'AED', 'SAR'] as const;
 
 export const MESSAGES = {
   currency: 'Currency symbol must be 1–3 characters with no digits',
@@ -31,12 +31,16 @@ export const MESSAGES = {
   settleSamePerson: 'Choose two different people',
   settlePeople: 'Choose who paid and who received the payment',
   username: 'Username must be 3–30 characters, using only letters, numbers and _',
-  password: 'Password must be 8–128 characters',
+  passwordShort: 'Password must be at least 8 characters',
+  passwordLong: 'Password can be at most 128 characters',
   usernameTaken: 'That username is taken',
   loginFailed: 'Username or password is incorrect',
   resetFailed: 'Username or recovery code is incorrect',
-  inviteInvalid: "That invite code isn't valid",
-  alreadyInGroup: "You're already in this group",
+  inviteInvalid: "That invite link isn't valid. Check the code and try again.",
+  inviteUsed: 'This invite has already been used',
+  inviteForSomeoneElse: "You're already in these groups, so this invite is for someone else. Send them the link.",
+  notYourPerson: 'Choose someone from your other groups',
+  alreadyMember: 'That person is already in this group',
   settleBeforeRemove: "Settle this member's balance before removing them",
   settleBeforeLeave: 'Settle your balance before leaving',
   groupGone: 'This group no longer exists',
@@ -65,8 +69,6 @@ export function groupFullRestore(name: string): string {
   return `This group already has 50 members, so ${name} can't be restored`;
 }
 
-export const GROUP_FULL_REJOIN = "This group already has 50 members, so you can't rejoin right now";
-
 /** Counts characters the way people do (so "zł" is 2, not bytes). */
 export function charCount(text: string): number {
   return Array.from(text).length;
@@ -80,7 +82,9 @@ export function checkCurrency(raw: string): Check<string> {
   if (n < 1 || n > 3 || /\p{Nd}/u.test(symbol) || /\p{Cc}/u.test(symbol)) {
     return { ok: false, message: MESSAGES.currency };
   }
-  return { ok: true, value: symbol };
+  // A listed symbol typed in other letters ("pkr") is written the listed way ("PKR").
+  const listed = CURRENCIES.find((c) => c.toLowerCase() === symbol.toLowerCase());
+  return { ok: true, value: listed ?? symbol };
 }
 
 export function checkGroupName(raw: string): Check<string> {
@@ -109,7 +113,19 @@ export function checkUsername(raw: string): Check<string> {
 
 export function checkPassword(raw: string): Check<string> {
   const n = charCount(raw);
-  return n >= 8 && n <= 128 ? { ok: true, value: raw } : { ok: false, message: MESSAGES.password };
+  if (n < 8) return { ok: false, message: MESSAGES.passwordShort };
+  if (n > 128) return { ok: false, message: MESSAGES.passwordLong };
+  return { ok: true, value: raw };
+}
+
+/** Invite codes are compared without spaces or dashes and in capitals. */
+export function normalizeInviteCode(code: unknown): string {
+  return String(code ?? '').toUpperCase().replace(/[\s-]/g, '');
+}
+
+/** "ABCDEFGHJKLM" -> ["ABCD", "EFGH", "JKLM"]: shown in groups of four so it's easy to read out. */
+export function inviteCodeGroups(code: string): string[] {
+  return code.match(/.{1,4}/g) ?? [code];
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];

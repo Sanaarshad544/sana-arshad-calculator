@@ -38,19 +38,26 @@ export async function canConnect(pool: Pool): Promise<boolean> {
   }
 }
 
+// When two transactions wait on each other, Postgres cancels one of them
+// (deadlock, or a conflict it can't order). Running that one again succeeds.
+const TRY_AGAIN = new Set(['40P01', '40001']);
+
 /** Runs `fn` in one transaction: everything is saved, or nothing is. */
 export async function transaction<T>(pool: Pool, fn: (client: Client) => Promise<T>): Promise<T> {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const result = await fn(client);
-    await client.query('COMMIT');
-    return result;
-  } catch (error) {
-    await client.query('ROLLBACK').catch(() => {});
-    throw error;
-  } finally {
-    client.release();
+  for (let attempt = 1; ; attempt++) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await fn(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      if (attempt < 3 && TRY_AGAIN.has((error as { code?: string }).code ?? '')) continue;
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 }
 

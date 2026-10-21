@@ -9,7 +9,7 @@ interface Props {
   note?: string;
 }
 
-/** The 12 listed symbols plus "Other" with a typed symbol. Display only: no conversion. */
+/** The 13 listed symbols plus "Other" with a typed symbol. Display only: no conversion. */
 export function CurrencyPicker({ choice, custom, onChange, error, note }: Props) {
   const selectId = useId();
   const customId = useId();

@@ -1,14 +1,15 @@
 import { createRoot } from 'react-dom/client';
-import { Link, RouterProvider, createBrowserRouter } from 'react-router-dom';
+import { Link, Navigate, RouterProvider, createBrowserRouter } from 'react-router-dom';
 import { AppLayout, PublicLayout } from './components/Layout.js';
 import { ToastProvider } from './components/Toasts.js';
 import { PageHeader, usePageTitle } from './components/ui.js';
-import { AccountPage } from './pages/AccountPage.js';
+import { InvitePage } from './pages/InvitePage.js';
+import { SettingsPage } from './pages/SettingsPage.js';
 import { LoginPage, ResetPage, SignupPage } from './pages/AuthPages.js';
 import { DashboardPage } from './pages/Dashboard.js';
 import { GroupBillPage, SettleUpPage } from './pages/GroupBillPages.js';
 import { GroupPage } from './pages/GroupPage.js';
-import { ChooseGroupPage, GroupsPage, JoinPage, NewGroupPage } from './pages/GroupsPages.js';
+import { ChooseGroupPage, EditGroupPage, GroupsPage, JoinPage, NewGroupPage } from './pages/GroupsPages.js';
 import { SoloBillPage, SoloListPage } from './pages/SoloPages.js';
 import { SessionProvider } from './session.js';
 import '@fontsource-variable/bricolage-grotesque';
@@ -28,6 +29,8 @@ function NotFoundPage() {
 }
 
 const router = createBrowserRouter([
+  // Works logged in or out, so it sits outside both frames.
+  { path: '/invite/:code', element: <InvitePage /> },
   {
     element: <PublicLayout />,
     children: [
@@ -46,13 +49,15 @@ const router = createBrowserRouter([
       { path: '/groups', element: <GroupsPage /> },
       { path: '/groups/new', element: <NewGroupPage /> },
       { path: '/groups/:groupId', element: <GroupPage /> },
+      { path: '/groups/:groupId/edit', element: <EditGroupPage /> },
       { path: '/groups/:groupId/bills/new', element: <GroupBillPage /> },
       { path: '/groups/:groupId/bills/:billId', element: <GroupBillPage /> },
       { path: '/groups/:groupId/settle-ups/new', element: <SettleUpPage /> },
       { path: '/groups/:groupId/settle-ups/:settleId', element: <SettleUpPage /> },
       { path: '/group-bill/new', element: <ChooseGroupPage /> },
       { path: '/join', element: <JoinPage /> },
-      { path: '/account', element: <AccountPage /> },
+      { path: '/settings', element: <SettingsPage /> },
+      { path: '/account', element: <Navigate to="/settings" replace /> },
       { path: '*', element: <NotFoundPage /> },
     ],
   },

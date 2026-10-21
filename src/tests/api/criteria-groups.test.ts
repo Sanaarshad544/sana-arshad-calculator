@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MESSAGES } from '../../shared/rules.js';
-import { addMembers, amt, balances, createGroup, groupBill, newUser, type Agent } from './helpers.js';
+import { addMembers, amt, balances, createGroup, groupBill, inviteCodeOf, newUser, type Agent } from './helpers.js';
 
 interface MemberView {
   id: string;
@@ -17,8 +17,9 @@ async function groupDetail(agent: Agent, groupId: string) {
 /** A second account that took over the name `name` in the owner's group. */
 async function claimAs(owner: Agent, groupId: string, memberId: string) {
   const second = await newUser('second');
-  const code = (await owner.get(`/api/groups/${groupId}`)).body.group.inviteCode;
-  const claim = await second.agent.post('/api/join/claim').send({ code, memberId });
+  const memberName = (await owner.get(`/api/groups/${groupId}`)).body.group.members.find((m: { id: string }) => m.id === memberId).name;
+  const code = await inviteCodeOf(owner, groupId, memberName);
+  const claim = await second.agent.post(`/api/invites/${code}/accept`).send({});
   expect(claim.status).toBe(200);
   return second;
 }

@@ -30,6 +30,19 @@ export interface MemberDto {
   hasAccount: boolean;
   isMe: boolean;
   balanceCents: number;
+  /**
+   * This person's own invite code while they haven't joined, when I may share it:
+   * only members who are in every group the person is in see it. Otherwise null.
+   */
+  inviteCode: string | null;
+  /**
+   * Why someone who hasn't joined shows no code:
+   * 'elsewhere' – their invite also opens a group I'm not in, so someone in all their groups must send it;
+   * 'joined' – they joined with their invite, and their account was already in this group under another name.
+   */
+  inviteNote: 'elsewhere' | 'joined' | null;
+  /** With 'joined': the name their account has in this group, if known. */
+  alsoHereAs: string | null;
 }
 
 export interface GroupSummary {
@@ -43,7 +56,6 @@ export interface GroupDetail {
   id: string;
   name: string;
   currency: string;
-  inviteCode: string;
   meId: string;
   /** Current members first (in the order they were added), then removed members. */
   members: MemberDto[];
@@ -91,18 +103,48 @@ export interface CurrencyTotal {
   cents: number;
 }
 
+/** One suggested payment that involves me: "You owe Ali Rs 400.00 · QA Trip". */
+export interface MyDebt {
+  groupId: string;
+  groupName: string;
+  currency: string;
+  otherName: string;
+  cents: number;
+  direction: 'owe' | 'owed';
+}
+
 export interface DashboardDto {
   owe: CurrencyTotal[];
   owed: CurrencyTotal[];
+  debts: MyDebt[];
   groups: GroupSummary[];
   soloBills: SoloBillSummary[];
 }
 
-export type JoinResult =
-  | { status: 'rejoined'; groupId: string }
-  | {
-      status: 'choose';
-      groupId: string;
-      groupName: string;
-      choices: { memberId: string; name: string; removed: boolean }[];
-    };
+/** Someone from my other groups who can be added to a group. */
+export interface PersonOption {
+  /** "p:<person id>" for a name-only person, "a:<account id>" for someone with an account. */
+  key: string;
+  name: string;
+  hasAccount: boolean;
+  groups: string[];
+}
+
+/** What an invite link shows before joining. A used invite shows nothing else (empty name and groups). */
+export interface InviteInfo {
+  name: string;
+  /** The groups the person is in now. */
+  groups: string[];
+  used: boolean;
+  /** The logged-in viewer is already in every one of the person's groups (so it's not their invite). */
+  viewerAlreadyIn: boolean;
+  /** Which of those groups the logged-in viewer is already in. */
+  viewerGroups: string[];
+}
+
+/** What happened when an invite was used. */
+export interface InviteResult {
+  joined: string[];
+  removed: string[];
+  alreadyIn: string[];
+}

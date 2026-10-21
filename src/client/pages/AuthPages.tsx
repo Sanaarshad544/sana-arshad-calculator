@@ -3,12 +3,13 @@ import { Link, useNavigate } from 'react-router-dom';
 import type { Account } from '../../shared/api.js';
 import { checkPassword, checkUsername } from '../../shared/rules.js';
 import { ApiError, api } from '../api.js';
+import { withoutKey } from '../fieldErrors.js';
 import { useBusy } from '../hooks.js';
 import { useSession } from '../session.js';
-import { Alert, TextField, usePageTitle } from '../components/ui.js';
+import { Alert, PasswordField, TextField, usePageTitle } from '../components/ui.js';
 
 /** Shown once after sign-up or reset. Leaving this screen means it's gone for good. */
-function RecoveryCodeScreen({ code, onDone }: { code: string; onDone: () => void }) {
+export function RecoveryCodeScreen({ code, onDone }: { code: string; onDone: () => void }) {
   const [copied, setCopied] = useState(false);
   return (
     <div className="stack">
@@ -72,7 +73,7 @@ export function LoginPage() {
       </h1>
       <Alert>{error}</Alert>
       <TextField label="Username" value={username} onChange={setUsername} autoComplete="username" autoCapitalize="none" />
-      <TextField label="Password" type="password" value={password} onChange={setPassword} autoComplete="current-password" />
+      <PasswordField label="Password" value={password} onChange={setPassword} autoComplete="current-password" />
       <button type="submit" className="btn btn-primary btn-wide" disabled={busy}>
         {busy ? 'Logging in…' : 'Log in'}
       </button>
@@ -142,17 +143,22 @@ export function SignupPage() {
         label="Username"
         hint="3–30 characters: letters, numbers and _"
         value={username}
-        onChange={setUsername}
+        onChange={(v) => {
+          setUsername(v);
+          setErrors((e) => withoutKey(e, 'username'));
+        }}
         error={errors.username}
         autoComplete="username"
         autoCapitalize="none"
       />
-      <TextField
+      <PasswordField
         label="Password"
-        hint="8–128 characters"
-        type="password"
+        hint="At least 8 characters"
         value={password}
-        onChange={setPassword}
+        onChange={(v) => {
+          setPassword(v);
+          setErrors((e) => withoutKey(e, 'password'));
+        }}
         error={errors.password}
         autoComplete="new-password"
       />
@@ -221,12 +227,14 @@ export function ResetPage() {
       <Alert>{error}</Alert>
       <TextField label="Username" value={username} onChange={setUsername} autoComplete="username" autoCapitalize="none" />
       <TextField label="Recovery code" value={code} onChange={setCode} autoComplete="off" autoCapitalize="characters" />
-      <TextField
+      <PasswordField
         label="New password"
-        hint="8–128 characters"
-        type="password"
+        hint="At least 8 characters"
         value={password}
-        onChange={setPassword}
+        onChange={(v) => {
+          setPassword(v);
+          setErrors((e) => withoutKey(e, 'newPassword'));
+        }}
         error={errors.newPassword}
         autoComplete="new-password"
       />

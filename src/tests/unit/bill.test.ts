@@ -125,7 +125,10 @@ describe('input checks (US-25)', () => {
     expect(errors(bill({ tax: amt('1000000.01') })).tax).toBe(MESSAGES.taxAmount);
     expect(errors(bill({ tip: amt('abc') })).tip).toBe(MESSAGES.tipAmount);
     expect(errors(bill({ tip: amt('1.234') })).tip).toBe(MESSAGES.tipAmount);
-    expect(errors(bill({ tax: amt('') })).tax).toBe(MESSAGES.taxAmount);
+  });
+  it('blank tax or tip means 0', () => {
+    expect(totals(bill({ tax: amt(''), tip: pct('') }))).toEqual(T(1000, 0, 0, 0));
+    expect(totals(bill({ tax: pct('  '), tip: amt('') })).totalCents).toBe(1000);
   });
   it.each(['abc', '-1', '0.001', '1000000.01'])('#7 rejects other charges amount %j', (value) => {
     expect(errors(bill({ otherCharges: amt(value) })).otherCharges).toBe(

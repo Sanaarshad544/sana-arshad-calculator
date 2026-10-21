@@ -1,13 +1,13 @@
-import { useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import type { ActivityDto, GroupBillSummary, GroupDetail, MemberDto, SettleUpDto } from '../../shared/api.js';
+import type { ActivityDto, GroupBillSummary, GroupDetail, MemberDto, PersonOption, SettleUpDto } from '../../shared/api.js';
 import { centsToInput } from '../../shared/money.js';
-import { MESSAGES, checkMemberName } from '../../shared/rules.js';
+import { MESSAGES, checkMemberName, inviteCodeGroups } from '../../shared/rules.js';
 import { ApiError, api } from '../api.js';
 import { useBusy, useLoad } from '../hooks.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import { useToast } from '../components/Toasts.js';
-import { Alert, Balance, EmptyState, PageHeader, Skeleton, TextField, money, niceDate, niceDateTime, usePageTitle } from '../components/ui.js';
+import { Alert, Balance, EmptyState, ErrorText, PageHeader, Skeleton, TextField, money, niceDate, niceDateTime, usePageTitle } from '../components/ui.js';
 
 const TABS = [
   { id: 'bills', label: 'Bills' },
@@ -64,6 +64,9 @@ export function GroupPage() {
   return (
     <>
       <PageHeader title={group.name} back={{ to: '/groups', label: 'Groups' }}>
+        <Link className="btn btn-secondary" to={`/groups/${group.id}/edit`}>
+          Edit group
+        </Link>
         <Link className="btn btn-primary" to={`/groups/${group.id}/bills/new`}>
           Add bill
         </Link>
@@ -209,17 +212,130 @@ function SettleUpsTab({ group, names }: { group: GroupDetail; names: Map<string,
 
 type PendingAction = { kind: 'remove'; member: MemberDto } | { kind: 'leave' } | null;
 
+function inviteLink(code: string): string {
+  return `${window.location.origin}/invite/${code}`;
+}
+
+/** The code in groups of four, so it's easy to read out. Copying it gives the plain code. */
+function InviteCode({ code, testId }: { code: string; testId: string }) {
+  return (
+    <code className="invite-code-inline" data-testid={testId}>
+      {inviteCodeGroups(code).map((part, i) => (
+        <span key={i}>{part}</span>
+      ))}
+    </code>
+  );
+}
+
+/** Code, Copy link and Share for one person who hasn't joined yet. */
+function InviteControls({ member }: { member: MemberDto }) {
+  const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
+  if (!member.inviteCode) return null;
+  const link = inviteLink(member.inviteCode);
+  const canShare = typeof navigator.share === 'function';
+  return (
+    <div className="invite-row">
+      <span className="muted small">
+        Invite code <InviteCode code={member.inviteCode} testId={`invite-code-${member.name}`} />
+      </span>
+      <button
+        type="button"
+        className="btn btn-secondary btn-small"
+        onClick={async () => {
+          try {
+            await navigator.clipboard.writeText(link);
+            setCopyFailed(false);
+            setCopied(true);
+            window.setTimeout(() => setCopied(false), 3000);
+          } catch {
+            // No clipboard here (for example over plain http on a home network): show the link to copy by hand.
+            setCopied(false);
+            setCopyFailed(true);
+          }
+        }}
+      >
+        {copied ? 'Copied' : 'Copy link'}
+        <span className="visually-hidden"> for {member.name}</span>
+      </button>
+      {canShare && (
+        <button
+          type="button"
+          className="btn btn-secondary btn-small"
+          onClick={() => {
+            navigator.share({ title: 'Bill Splitter', text: `${member.name}, join our groups on Bill Splitter`, url: link }).catch(() => {});
+          }}
+        >
+          Share<span className="visually-hidden"> invite for {member.name}</span>
+        </button>
+      )}
+      {copyFailed && (
+        <TextField
+          className="invite-link-field"
+          label={`Invite link for ${member.name}`}
+          hint="Copying didn't work here. Select the link and copy it."
+          value={link}
+          onChange={() => {}}
+          readOnly
+          onFocus={(e) => e.currentTarget.select()}
+        />
+      )}
+    </div>
+  );
+}
+
+/** How a member who hasn't joined is shown: their invite, or why there's none to send. */
+function joinStatus(m: MemberDto): string {
+  if (m.hasAccount) return 'has an account';
+  if (m.inviteNote === 'joined') return m.alsoHereAs ? `already here as ${m.alsoHereAs}` : 'joined under another name';
+  return 'not joined yet';
+}
+
+type JustAdded = { id: string; invite: 'new' | 'changed' | 'covered' };
+
+const ADDED_TEXT: Record<JustAdded['invite'], string> = {
+  new: "Send them their own invite link so they can join with an account. It links every group they're in at once.",
+  changed: "Their invite link has changed, so send them this new one. It links every group they're in at once.",
+  covered: 'Their invite link now covers this group too.',
+};
+
 function MembersTab({ group, reload }: { group: GroupDetail; reload: () => Promise<void> }) {
   const toast = useToast();
   const navigate = useNavigate();
   const [newName, setNewName] = useState('');
   const [nameError, setNameError] = useState('');
+  const [personKey, setPersonKey] = useState('');
+  const [personError, setPersonError] = useState('');
+  // Shown when their usual name is already used in this group.
+  const [personName, setPersonName] = useState<string | null>(null);
+  const [personNameError, setPersonNameError] = useState('');
+  const [justAdded, setJustAdded] = useState<JustAdded | null>(null);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const renameButtons = useRef(new Map<string, HTMLButtonElement | null>());
+  const [renameValue, setRenameValue] = useState('');
+  const [renameError, setRenameError] = useState('');
   const [error, setError] = useState('');
   const [pending, setPending] = useState<PendingAction>(null);
-  const [copied, setCopied] = useState(false);
   const { busy, run } = useBusy();
+  const people = useLoad(() => api.get<{ people: PersonOption[] }>(`/people?groupId=${group.id}`).then((r) => r.people), [group.id]);
   const current = group.members.filter((m) => m.status === 'current');
   const removed = group.members.filter((m) => m.status === 'removed');
+  const added = justAdded ? group.members.find((m) => m.id === justAdded.id) : undefined;
+  // After adding someone from my other groups, the cursor moves to their "Invite" box.
+  const inviteBoxTitle = useRef<HTMLHeadingElement>(null);
+  const focusBoxFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!added || focusBoxFor.current !== added.id) return;
+    focusBoxFor.current = null;
+    if (added.inviteCode) inviteBoxTitle.current?.focus();
+  });
+
+  const afterAdd = async (next: JustAdded) => {
+    toast('Member added');
+    setJustAdded(next);
+    // The list of people to add is refreshed without being cleared, so the form stays put.
+    await Promise.all([reload(), people.reload()]);
+  };
 
   const addMember = (e: FormEvent) => {
     e.preventDefault();
@@ -230,17 +346,79 @@ function MembersTab({ group, reload }: { group: GroupDetail; reload: () => Promi
     }
     void run(async () => {
       try {
-        await api.post(`/groups/${group.id}/members`, { name: newName });
+        const r = await api.post<{ memberId: string }>(`/groups/${group.id}/members`, { name: newName });
         setNewName('');
         setNameError('');
-        toast('Member added');
-        await reload();
+        await afterAdd({ id: r.memberId, invite: 'new' });
       } catch (err) {
         const e2 = err as ApiError;
         setNameError(e2.fields.name ?? e2.message);
       }
     });
   };
+
+  const addPerson = (e: FormEvent) => {
+    e.preventDefault();
+    if (!personKey) {
+      setPersonError('Choose someone to add');
+      return;
+    }
+    if (personName !== null) {
+      const check = checkMemberName(personName);
+      if (!check.ok) {
+        setPersonNameError(check.message);
+        return;
+      }
+    }
+    void run(async () => {
+      try {
+        const body = personName === null ? { personKey } : { personKey, name: personName };
+        const r = await api.post<{ memberId: string; inviteChanged: boolean }>(`/groups/${group.id}/members`, body);
+        setPersonKey('');
+        setPersonError('');
+        setPersonName(null);
+        setPersonNameError('');
+        focusBoxFor.current = r.memberId;
+        await afterAdd({ id: r.memberId, invite: r.inviteChanged ? 'changed' : 'covered' });
+      } catch (err) {
+        const e2 = err as ApiError;
+        if (e2.status === 409 && e2.fields.name) {
+          // Their usual name is taken here: ask for another one.
+          setPersonName((n) => n ?? people.data?.find((p) => p.key === personKey)?.name ?? '');
+          setPersonNameError(e2.fields.name);
+        } else {
+          setPersonError(e2.fields.person ?? e2.fields.name ?? e2.message);
+        }
+      }
+    });
+  };
+
+  const focusRename = (memberId: string) => window.setTimeout(() => renameButtons.current.get(memberId)?.focus(), 0);
+  const cancelRename = (memberId: string) => {
+    setRenaming(null);
+    setRenameError('');
+    focusRename(memberId);
+  };
+
+  const saveRename = (member: MemberDto) =>
+    run(async () => {
+      const check = checkMemberName(renameValue);
+      if (!check.ok) {
+        setRenameError(check.message);
+        return;
+      }
+      try {
+        await api.put(`/groups/${group.id}/members/${member.id}`, { name: renameValue });
+        setRenaming(null);
+        setRenameError('');
+        toast('Name changed');
+        await reload();
+        focusRename(member.id);
+      } catch (err) {
+        const e2 = err as ApiError;
+        setRenameError(e2.fields.name ?? e2.message);
+      }
+    });
 
   const confirm = () =>
     run(async () => {
@@ -276,62 +454,161 @@ function MembersTab({ group, reload }: { group: GroupDetail; reload: () => Promi
       }
     });
 
+  const renameControls = (m: MemberDto) =>
+    renaming === m.id ? (
+      <form
+        className="rename-form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void saveRename(m);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            cancelRename(m.id);
+          }
+        }}
+        noValidate
+      >
+        <TextField
+          label={`New name for ${m.name}`}
+          value={renameValue}
+          onChange={(v) => {
+            setRenameValue(v);
+            setRenameError('');
+          }}
+          error={renameError}
+          maxLength={200}
+          autoFocus
+        />
+        <button type="submit" className="btn btn-primary btn-small" disabled={busy}>
+          Save name
+        </button>
+        <button type="button" className="btn btn-secondary btn-small" onClick={() => cancelRename(m.id)}>
+          Cancel
+        </button>
+      </form>
+    ) : (
+      <button
+        type="button"
+        className="btn btn-ghost btn-small"
+        ref={(el) => {
+          renameButtons.current.set(m.id, el);
+        }}
+        onClick={() => {
+          setRenaming(m.id);
+          setRenameValue(m.name);
+          setRenameError('');
+        }}
+      >
+        Rename<span className="visually-hidden"> {m.name}</span>
+      </button>
+    );
+
   return (
     <div className="stack-lg">
       <Alert>{error}</Alert>
+      {added?.inviteCode && justAdded && (
+        <section className="callout invite-callout" aria-labelledby="invite-box-title">
+          <h2 id="invite-box-title" className="callout-title" tabIndex={-1} ref={inviteBoxTitle}>
+            Invite {added.name}
+          </h2>
+          <p>
+            <strong>{added.name}</strong> was added. {ADDED_TEXT[justAdded.invite]}
+          </p>
+          <InviteControls member={added} />
+        </section>
+      )}
       <section aria-labelledby="current-heading">
         <h2 id="current-heading" className="section-title">
           Members ({current.length})
         </h2>
         <ul className="member-list">
           {current.map((m) => (
-            <li key={m.id} className="member-row">
-              <span>
-                {m.name}
-                {m.isMe && <span className="muted"> (you)</span>}
-                <span className="muted small"> · {m.hasAccount ? 'has an account' : 'name only'}</span>
-              </span>
-              {!m.isMe && (
-                <button type="button" className="btn btn-danger-outline btn-small" onClick={() => setPending({ kind: 'remove', member: m })}>
-                  Remove<span className="visually-hidden"> {m.name}</span>
-                </button>
+            <li key={m.id} className="member-row member-row-stack">
+              <div className="member-main">
+                <span className="person">
+                  {m.name}
+                  {m.isMe && <span className="muted"> (you)</span>}
+                  <span className="muted small"> · {joinStatus(m)}</span>
+                </span>
+                <div className="member-actions">
+                  {renameControls(m)}
+                  {!m.isMe && (
+                    <button type="button" className="btn btn-danger-outline btn-small" onClick={() => setPending({ kind: 'remove', member: m })}>
+                      Remove<span className="visually-hidden"> {m.name}</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+              <InviteControls member={m} />
+              {m.inviteNote === 'elsewhere' && (
+                <p className="muted small invite-note">Only someone who's in all of {m.name}'s groups can send their invite.</p>
               )}
             </li>
           ))}
         </ul>
         <form className="inline-form" onSubmit={addMember} noValidate>
-          <TextField label="Add a friend by name" value={newName} onChange={setNewName} error={nameError} maxLength={200} />
+          <TextField
+            label="Add a friend by name"
+            value={newName}
+            onChange={(v) => {
+              setNewName(v);
+              setNameError('');
+            }}
+            error={nameError}
+            maxLength={200}
+          />
           <button type="submit" className="btn btn-secondary" disabled={busy}>
             Add member
           </button>
         </form>
-      </section>
-
-      <section aria-labelledby="invite-heading">
-        <h2 id="invite-heading" className="section-title">
-          Invite code
-        </h2>
-        <p className="muted">Friends you added by name can enter this code to take over their own name.</p>
-        <div className="row">
-          <code className="invite-code" data-testid="invite-code">
-            {group.inviteCode}
-          </code>
-          <button
-            type="button"
-            className="btn btn-secondary btn-small"
-            onClick={async () => {
-              try {
-                await navigator.clipboard.writeText(group.inviteCode);
-                setCopied(true);
-                window.setTimeout(() => setCopied(false), 3000);
-              } catch {
-                setCopied(false);
-              }
-            }}
-          >
-            {copied ? 'Copied' : 'Copy'}
-          </button>
-        </div>
+        {people.data && people.data.length > 0 && (
+          <form className="inline-form" onSubmit={addPerson} noValidate>
+            <div className="field">
+              <label htmlFor="add-person" className="field-label">
+                Or add someone from your other groups
+              </label>
+              <select
+                id="add-person"
+                className="input select"
+                value={personKey}
+                onChange={(e) => {
+                  setPersonKey(e.target.value);
+                  setPersonError('');
+                  setPersonName(null);
+                  setPersonNameError('');
+                }}
+                aria-invalid={personError ? true : undefined}
+                aria-describedby={personError ? 'add-person-error' : undefined}
+              >
+                <option value="">Choose a person</option>
+                {people.data.map((p) => (
+                  <option key={p.key} value={p.key}>
+                    {p.name} ({p.groups.join(', ')})
+                  </option>
+                ))}
+              </select>
+              <ErrorText id="add-person-error">{personError}</ErrorText>
+            </div>
+            {personName !== null && (
+              <TextField
+                label="Name in this group"
+                value={personName}
+                onChange={(v) => {
+                  setPersonName(v);
+                  setPersonNameError('');
+                }}
+                error={personNameError}
+                maxLength={200}
+                autoFocus
+              />
+            )}
+            <button type="submit" className="btn btn-secondary" disabled={busy}>
+              Add to group
+            </button>
+          </form>
+        )}
       </section>
 
       <section aria-labelledby="removed-heading">
@@ -343,11 +620,16 @@ function MembersTab({ group, reload }: { group: GroupDetail; reload: () => Promi
         ) : (
           <ul className="member-list">
             {removed.map((m) => (
-              <li key={m.id} className="member-row">
-                <span>{m.name} (removed)</span>
-                <button type="button" className="btn btn-secondary btn-small" onClick={() => void restore(m)} disabled={busy}>
-                  Restore<span className="visually-hidden"> {m.name}</span>
-                </button>
+              <li key={m.id} className="member-row member-row-stack">
+                <div className="member-main">
+                  <span>{m.name} (removed)</span>
+                  <div className="member-actions">
+                    {renameControls(m)}
+                    <button type="button" className="btn btn-secondary btn-small" onClick={() => void restore(m)} disabled={busy}>
+                      Restore<span className="visually-hidden"> {m.name}</span>
+                    </button>
+                  </div>
+                </div>
               </li>
             ))}
           </ul>
@@ -384,7 +666,7 @@ function MembersTab({ group, reload }: { group: GroupDetail; reload: () => Promi
         onConfirm={() => void confirm()}
         onCancel={() => setPending(null)}
       >
-        <p>{group.iAmLastAccount ? MESSAGES.lastAccountWarning : 'You can rejoin later with the invite code.'}</p>
+        <p>{group.iAmLastAccount ? MESSAGES.lastAccountWarning : 'Any member can restore you later.'}</p>
       </ConfirmDialog>
     </div>
   );

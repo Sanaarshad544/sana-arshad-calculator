@@ -10,15 +10,15 @@ const THEMES: { value: Theme; label: string }[] = [
   { value: 'dark', label: 'Dark' },
 ];
 
-export function AccountPage() {
-  usePageTitle('Account');
+export function SettingsPage() {
+  usePageTitle('Settings');
   const { account, setTheme, logout } = useSession();
   const [error, setError] = useState('');
   const name = useId();
   if (!account) return null;
   return (
     <>
-      <PageHeader title="Account" />
+      <PageHeader title="Settings" />
       <div className="stack-lg">
         <section className="card" aria-labelledby="acct-user">
           <h2 id="acct-user" className="section-title">

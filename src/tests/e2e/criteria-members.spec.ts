@@ -9,6 +9,8 @@ interface MemberDto {
   name: string;
   status: 'current' | 'removed';
   balanceCents: number;
+  /** The person's own invite code while they have no account; null once they have one. */
+  inviteCode: string | null;
 }
 
 /** A group bill paid by `payerId`, split equally between `participantIds`. */
@@ -47,6 +49,15 @@ async function members(page: Page, groupId: string): Promise<MemberDto[]> {
   return group.members;
 }
 
+/** A not-yet-joined person's own invite code, as any member of the group sees it. */
+async function inviteCodeOf(page: Page, groupId: string, memberName: string): Promise<string> {
+  const code = (await members(page, groupId)).find((m) => m.name === memberName)?.inviteCode;
+  if (!code) throw new Error(`${memberName} has no invite code`);
+  return code;
+}
+
+const inviteHeading = (page: Page, name: string) => page.getByRole('heading', { level: 1, name: `${name}, join your friends' groups` });
+
 interface Pair {
   owner: Page;
   omar: Page;
@@ -59,20 +70,26 @@ interface Pair {
 
 /**
  * Two accounts in one group (the two-context pattern from groups.spec.ts):
- * the owner, and a second account that claimed the name "Omar" with the invite code.
+ * the owner, and a second account that joined as "Omar" with Omar's own invite code.
  */
 async function twoAccountGroup(browser: Browser, info: TestInfo, groupName: string, otherNames: string[] = []): Promise<Pair> {
   const ownerCtx = await browser.newContext();
   const owner = await ownerCtx.newPage();
-  const ownerName = await signUpFast(owner, info, 'own');
-  const g = await makeGroup(owner, groupName, '$', ['Omar', ...otherNames]);
-  const { group } = await api<{ group: { inviteCode: string } }>(owner, 'get', `/groups/${g.groupId}`);
-
   const omarCtx = await browser.newContext();
-  const omar = await omarCtx.newPage();
-  await signUpFast(omar, info, 'omar');
-  await api(omar, 'post', '/join/claim', { code: group.inviteCode, memberId: g.ids.Omar });
-  return { owner, omar, groupId: g.groupId, meId: g.meId, ids: g.ids, ownerName, contexts: [ownerCtx, omarCtx] };
+  const contexts = [ownerCtx, omarCtx];
+  try {
+    const ownerName = await signUpFast(owner, info, 'own');
+    const g = await makeGroup(owner, groupName, '$', ['Omar', ...otherNames]);
+    const code = await inviteCodeOf(owner, g.groupId, 'Omar');
+
+    const omar = await omarCtx.newPage();
+    await signUpFast(omar, info, 'omar');
+    await api(omar, 'post', `/invites/${code}/accept`);
+    return { owner, omar, groupId: g.groupId, meId: g.meId, ids: g.ids, ownerName, contexts };
+  } catch (error) {
+    await closeAll(contexts);
+    throw error;
+  }
 }
 
 async function closeAll(contexts: BrowserContext[]): Promise<void> {
@@ -234,6 +251,9 @@ test('US-21 #1-#4 a member with a balance must settle first; at 0.00 they leave 
     await openMembersTab(omar, groupId, 'Leavers');
     await omar.getByRole('button', { name: 'Leave group' }).click();
     await expect(dialog).toBeVisible();
+    // Coming back is by Restore only: the dialog says so, and no longer mentions a code to rejoin with.
+    await expect(dialog).toContainText('Any member can restore you later.');
+    await expect(dialog).not.toContainText(/code/i);
     await dialog.getByRole('button', { name: 'Leave group' }).click();
     await expect(omar.getByRole('status').getByText('You left the group')).toBeVisible();
     await expect(omar.getByRole('heading', { level: 1, name: 'Groups' })).toBeVisible();
@@ -344,9 +364,11 @@ test('US-23 #3 a restored member with an account gets the group back on their ne
   }
 });
 
-// ---------- US-24 ----------
+// ---------- US-22 #4 / US-24 retired ----------
+// Rejoining with a group code (US-24) is gone: a removed member comes back by Restore only (US-23, round1-members.spec.ts).
+// What is left of "the code of a deleted group stops working" is the person's own invite.
 
-test('US-24 #3 the invite code of a deleted group is no longer valid', async ({ browser }, info) => {
+test("US-22 #4 a person's invite stops working once the only group they were in is deleted", async ({ browser }, info) => {
   const ownerCtx = await browser.newContext();
   const owner = await ownerCtx.newPage();
   const visitorCtx = await browser.newContext();
@@ -354,16 +376,17 @@ test('US-24 #3 the invite code of a deleted group is no longer valid', async ({ 
   try {
     await signUpFast(owner, info, 'own');
     const { groupId } = await makeGroup(owner, 'Short lived', '$', ['Omar']);
-    const { group } = await api<{ group: { inviteCode: string } }>(owner, 'get', `/groups/${groupId}`);
-    const code = group.inviteCode;
+    const code = await inviteCodeOf(owner, groupId, 'Omar');
 
     // The code works while the group exists...
     await signUpFast(visitor, info, 'vis');
     await visitor.goto('/join');
-    await expect(visitor.getByRole('heading', { level: 1, name: 'Join a group' })).toBeVisible();
+    await expect(visitor.getByRole('heading', { level: 1, name: 'Use an invite code' })).toBeVisible();
     await visitor.getByLabel('Invite code').fill(code);
     await visitor.getByRole('button', { name: 'Continue' }).click();
-    await expect(visitor.getByRole('radio', { name: "I'm Omar" })).toBeVisible();
+    await expect(inviteHeading(visitor, 'Omar')).toBeVisible();
+    await expect(visitor.getByText('Short lived')).toBeVisible();
+    await expect(visitor.getByRole('button', { name: 'Join these groups' })).toBeVisible();
 
     // ...and stops working once the last account holder has deleted the group.
     await openMembersTab(owner, groupId, 'Short lived');
@@ -372,11 +395,18 @@ test('US-24 #3 the invite code of a deleted group is no longer valid', async ({ 
     await expect(owner.getByRole('heading', { level: 1, name: 'Groups' })).toBeVisible();
 
     await visitor.goto('/join');
-    await expect(visitor.getByRole('heading', { level: 1, name: 'Join a group' })).toBeVisible();
+    await expect(visitor.getByRole('heading', { level: 1, name: 'Use an invite code' })).toBeVisible();
     await visitor.getByLabel('Invite code').fill(code);
     await visitor.getByRole('button', { name: 'Continue' }).click();
-    await expect(visitor.getByRole('alert')).toHaveText("That invite code isn't valid");
-    await expect(visitor.getByRole('radio')).toHaveCount(0);
+    await expect(visitor.getByRole('heading', { level: 1, name: 'Invite not found' })).toBeVisible();
+    await expect(visitor.getByRole('alert')).toHaveText("That invite link isn't valid. Check the code and try again.");
+    await expect(visitor.getByRole('button', { name: 'Join these groups' })).toHaveCount(0);
+    await expect(inviteHeading(visitor, 'Omar')).toHaveCount(0);
+
+    // Nothing was joined by looking.
+    await visitor.goto('/groups');
+    await expect(visitor.getByRole('heading', { level: 1, name: 'Groups' })).toBeVisible();
+    await expect(visitor.getByText('No groups yet. Create one to start splitting with friends.')).toBeVisible();
   } finally {
     await closeAll([ownerCtx, visitorCtx]);
   }
@@ -513,6 +543,27 @@ test('US-36 #5 every button, link and tick box on the bill form, group page and 
   await expect(leaveDialog).toBeVisible();
   await expectBigTargets(leaveDialog, 'leave dialog');
   await page.keyboard.press('Escape');
+
+  // Round 1: a friend just added (their invite box with Copy link / Share), the rename form, and the Edit group and invite-code pages.
+  await page.getByLabel('Add a friend by name').fill('Newcomer');
+  await page.getByRole('button', { name: 'Add member' }).click();
+  await expect(page.getByText('Send them their own invite link')).toBeVisible();
+  await expectBigTargets(body, 'members tab, friend just added');
+  await expectTargetSizeRulePasses(page, 'members tab, friend just added');
+  await page.getByRole('button', { name: 'Rename Ali' }).click();
+  await expect(page.getByLabel('New name for Ali')).toBeVisible();
+  await expectBigTargets(body, 'members tab, rename form');
+  await expectTargetSizeRulePasses(page, 'members tab, rename form');
+  for (const [path, heading] of [
+    [`/groups/${groupId}/edit`, 'Edit group'],
+    ['/join', 'Use an invite code'],
+  ] as const) {
+    await page.goto(path);
+    await expect(page.getByRole('heading', { level: 1, name: heading })).toBeVisible();
+    await expectBigTargets(body, heading);
+    await expectTargetSizeRulePasses(page, heading);
+  }
+
   await page.goto('/solo/new');
   await page.getByLabel('Item 1 price').fill('5');
   await page.getByRole('link', { name: 'Groups' }).first().click();
@@ -529,6 +580,7 @@ for (const scheme of ['light', 'dark'] as const) {
     test.setTimeout(150_000);
     const ctx = await browser.newContext({ colorScheme: scheme });
     const joinerCtx = await browser.newContext({ colorScheme: scheme });
+    const guestCtx = await browser.newContext({ colorScheme: scheme });
     try {
       const page = await ctx.newPage();
 
@@ -538,7 +590,7 @@ for (const scheme of ['light', 'dark'] as const) {
       await expect(page.getByRole('heading', { level: 1, name: 'Reset your password' })).toBeVisible();
       await expectNoA11yViolations(page, 'reset password');
       await page.getByRole('button', { name: 'Reset password' }).click();
-      await expect(page.getByText('Password must be 8–128 characters', { exact: true }).last()).toBeVisible();
+      await expect(page.getByText('Password must be at least 8 characters', { exact: true })).toBeVisible();
       await expectNoA11yViolations(page, 'reset password with a field error');
       // A fresh name each run: wrong codes for one username count towards its wait (US-03 #5).
       await page.getByLabel('Username').fill(uniqueName('nobody', info));
@@ -552,7 +604,7 @@ for (const scheme of ['light', 'dark'] as const) {
       const username = uniqueName('ax', info);
       await page.goto('/signup');
       await page.getByLabel('Username').fill(username);
-      await page.getByLabel('Password').fill(PASSWORD);
+      await page.getByLabel('Password', { exact: true }).fill(PASSWORD);
       await page.getByRole('button', { name: 'Create account' }).click();
       await expect(page.getByRole('heading', { level: 1, name: 'Save your recovery code' })).toBeVisible();
       await expect(page.getByTestId('recovery-code')).toBeVisible();
@@ -603,23 +655,53 @@ for (const scheme of ['light', 'dark'] as const) {
       await expectNoA11yViolations(page, 'unsaved changes dialog');
       await dialog.getByRole('button', { name: 'Stay' }).click();
 
-      // Join, both steps, as a second account.
-      const { group } = await api<{ group: { inviteCode: string } }>(page, 'get', `/groups/${groupId}`);
+      // "Use an invite code" and the invite page, as a second (logged-in) account.
+      const code = await inviteCodeOf(page, groupId, 'Omar');
       const joiner = await joinerCtx.newPage();
       await signUpFast(joiner, info, 'jn');
       await joiner.goto('/join');
-      await expect(joiner.getByRole('heading', { level: 1, name: 'Join a group' })).toBeVisible();
-      await expectNoA11yViolations(joiner, 'join (enter the code)');
+      await expect(joiner.getByRole('heading', { level: 1, name: 'Use an invite code' })).toBeVisible();
+      await expectNoA11yViolations(joiner, 'use an invite code');
+      await joiner.getByRole('button', { name: 'Continue' }).click();
+      await expect(joiner.getByText('Enter the invite code you were sent', { exact: true })).toBeVisible();
+      await expectNoA11yViolations(joiner, 'use an invite code with a field error');
       await joiner.getByLabel('Invite code').fill('WRONGCODE');
       await joiner.getByRole('button', { name: 'Continue' }).click();
-      await expect(joiner.getByRole('alert')).toHaveText("That invite code isn't valid");
-      await expectNoA11yViolations(joiner, 'join (invalid code)');
-      await joiner.getByLabel('Invite code').fill(group.inviteCode);
+      await expect(joiner.getByRole('heading', { level: 1, name: 'Invite not found' })).toBeVisible();
+      await expect(joiner.getByRole('alert')).toHaveText("That invite link isn't valid. Check the code and try again.");
+      await expectNoA11yViolations(joiner, 'invite not found');
+      await joiner.goto('/join');
+      await expect(joiner.getByRole('heading', { level: 1, name: 'Use an invite code' })).toBeVisible();
+      await joiner.getByLabel('Invite code').fill(code);
       await joiner.getByRole('button', { name: 'Continue' }).click();
-      await expect(joiner.getByRole('radio', { name: "I'm Omar" })).toBeVisible();
-      await expectNoA11yViolations(joiner, 'join (choose your name)');
+      await expect(inviteHeading(joiner, 'Omar')).toBeVisible();
+      await expect(joiner.getByRole('button', { name: 'Join these groups' })).toBeVisible();
+      await expectNoA11yViolations(joiner, 'invite page (logged in)');
+
+      // The same invite page for someone with no account yet: create one, or log in.
+      const guest = await guestCtx.newPage();
+      await guest.goto(`/invite/${code}`);
+      await expect(inviteHeading(guest, 'Omar')).toBeVisible();
+      await expect(guest.getByRole('button', { name: 'Create account and join' })).toBeVisible();
+      await expectNoA11yViolations(guest, 'invite page (create an account)');
+      await guest.getByRole('button', { name: 'Create account and join' }).click();
+      await expect(guest.getByText('Password must be at least 8 characters', { exact: true })).toBeVisible();
+      await expectNoA11yViolations(guest, 'invite page with field errors');
+      await guest.getByRole('radio', { name: 'I have an account' }).check();
+      await expect(guest.getByRole('button', { name: 'Log in and join' })).toBeVisible();
+      await expectNoA11yViolations(guest, 'invite page (log in)');
+
+      // Once used, the link says so.
+      await joiner.getByRole('button', { name: 'Join these groups' }).click();
+      await expect(joiner.getByRole('heading', { level: 1, name: 'Dashboard' })).toBeVisible();
+      await guest.reload();
+      // A used invite no longer shows whose it was.
+      await expect(guest.getByRole('heading', { level: 1, name: 'Invite already used' })).toBeVisible();
+      await expect(guest.getByText('Omar')).toHaveCount(0);
+      await expect(guest.getByRole('alert')).toHaveText('This invite has already been used');
+      await expectNoA11yViolations(guest, 'invite page (already used)');
     } finally {
-      await closeAll([ctx, joinerCtx]);
+      await closeAll([ctx, joinerCtx, guestCtx]);
     }
   });
 }
@@ -816,7 +898,11 @@ test('US-38 #5 right after a successful Save of an edited solo bill, leaving sho
   await expect(dialog).toBeVisible();
   await dialog.getByRole('button', { name: 'Stay' }).click();
   // ...but right after saving the edit it does not.
+  const edited = page.waitForResponse((res) => res.request().method() === 'PUT' && /\/api\/solo-bills\/\d+$/.test(res.url()));
   await page.getByRole('button', { name: 'Save bill' }).click();
+  await edited;
+  // The first save's "Bill saved" message can still be on screen, so wait for the button to read "Save bill" again: the save is finished.
+  await expect(page.getByRole('button', { name: 'Save bill' })).toBeEnabled();
   await expect(page.getByRole('status').getByText('Bill saved').last()).toBeVisible();
   await page.getByRole('link', { name: '← Solo bills' }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'Solo bills' })).toBeVisible();

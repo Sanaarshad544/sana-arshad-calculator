@@ -1,6 +1,6 @@
 # User Stories
 
-How the Bill Splitting Calculator helps each role get their jobs done. Every story names its role (from [app-roles.md](app-roles.md)) and the job it serves (from [jobs-to-be-done.md](jobs-to-be-done.md)), and has testable acceptance criteria and a status.
+How Bill Splitter helps each role get their jobs done. Every story names its role (from [app-roles.md](app-roles.md)) and the job it serves (from [jobs-to-be-done.md](jobs-to-be-done.md)), and has testable acceptance criteria and a status.
 
 ## How to read this file
 
@@ -23,10 +23,10 @@ These rules come from the spec and apply wherever a story mentions them.
 - **Items:** every bill (solo, equal or itemized) needs 1–200 items. The largest possible grand total is 1,000,000,000.00, and it is still exact to the cent.
 - **Names** (spaces at the start and end are trimmed before checking):
   - Group name: required, 1–50 characters.
-  - Member name: required, 1–30 characters, and never reused within a group: it can't match any member the group has ever had, current or removed. Not case-sensitive: "omar" clashes with "Omar".
+  - Member name: required, 1–30 characters, and unique within a group: it can't match any other member, current or removed. Not case-sensitive: "omar" clashes with "Omar". Renaming a member frees their old name.
   - Bill name: optional, up to 60 characters, defaulting to "Bill – date".
   - Item name: optional, up to 40 characters, defaulting to "Item 1", "Item 2" and so on.
-- **Tax and tip:** each can be a **%** (0–100, at most 2 decimal places, e.g. 12.5 or 8.25) or an **amount** (0.00–1,000,000.00). Tip may be 0.
+- **Tax and tip:** each can be a **%** (0–100, at most 2 decimal places, e.g. 12.5 or 8.25) or an **amount** (0.00–1,000,000.00). Both boxes start empty, and a blank tax or tip means 0.
 - **Other charges** (optional, one field per bill, always labelled "Other charges", for service, delivery or table fees and similar):
   - Blank, 0 or 0.00 means "no other charges", and the results show "Other charges 0.00".
   - As an amount: 0.01–1,000,000.00, at most 2 decimal places.
@@ -39,13 +39,17 @@ These rules come from the spec and apply wherever a story mentions them.
 - **Grand total** = items subtotal + tax + other charges + tip.
 - **Exactness:** for every bill, the shares add up exactly to the grand total.
 - **Results:** totals appear only when **Calculate** is pressed. Changing any input hides the old result until Calculate is pressed again.
-- **Currency:** a display symbol only, with no conversion. Choose from the default list of 12 ($, €, £, ¥, ₹, Rs, ₩, ₺, R$, CHF, AED, SAR), or choose "Other" and type a symbol of 1–3 characters with no digits.
+- **Currency:** a display symbol only, with no conversion. Choose from the list of 13 ($, €, £, ¥, ₹, Rs, PKR, ₩, ₺, R$, CHF, AED, SAR), or choose "Other" and type a symbol of 1–3 characters with no digits. A listed symbol typed under "Other" in different letters ("pkr") is saved the listed way ("PKR"). A group's currency can be changed at any time, which relabels every amount without converting it.
 - **Accounts:**
   - Username: 3–30 characters (letters, numbers, underscore), not case-sensitive.
-  - Password: 8–128 characters, any characters.
+  - Password: at least 8 characters (and at most 128), any characters. Every password box has an eye button to show or hide what's typed.
   - A session ends on Log out or after 30 days without use.
   - **Wrong tries:** after 5 wrong passwords in a row for a username, each next try must wait: 30 seconds, then 1, 2 and 5 minutes, then 15 minutes for every try after that. Nobody is ever locked out: once the wait is over, the right password works. The count starts again after a successful login, or after a day without tries. Recovery codes are counted separately in the same way.
 - **Group size:** 1–50 **current** members. Removed members don't count.
+- **People and invites:** everyone added to a group by name is a *person*, and the same person can be added to several groups by picking them from "Or add someone from your other groups". Each person who hasn't joined yet has their own invite code (12 letters and numbers, shown in groups of four, e.g. "K7QM XW3P 9HTD") and link (`/invite/<code>`). Using it once links every group that person is in to one account. There is no group-wide code.
+  - **Who can see a code:** one code opens all of that person's groups, so only current members who are in every one of those groups can see, copy and share it. For someone in just one group, that's every current member of it.
+  - **When a code changes:** when someone with an account leaves or is removed from a group, everyone in that group who hasn't joined gets a new code. When a person is added to another group that someone who could see their code isn't in, they get a new code too. Old links then show "That invite link isn't valid. Check the code and try again."
+  - **A used invite** shows only "This invite has already been used", never whose it was or their groups.
 - **Language and number display:**
   - All text is in English.
   - Amounts are shown with a thousands comma and 2 decimals ("1,000,000.00").
@@ -55,11 +59,12 @@ These rules come from the spec and apply wherever a story mentions them.
 
 ## Implementation progress
 
-- **Last checked:** 21 Oct 2026, against the code in `src/`.
-- **Implemented:** all 38 stories.
+- **Last checked:** 22 Oct 2026, against the code in `src/`, after QA round 1 and its security and code reviews.
+- **Implemented:** all 40 stories.
+- **Retired:** US-24 "Rejoin a group with the invite code" was retired in QA round 1. There is no group-wide code any more, and removed members come back only through Restore (US-23).
 - **How it was checked:** `npm test` (run from `src/`) passed twice in a row:
-  - 190 unit and server tests.
-  - 154 browser tests, each run in Chromium (Chrome and Edge), Firefox and WebKit (Safari), 462 runs in all, with automatic WCAG 2.2 AA checks in light and dark mode.
+  - 215 unit and server tests.
+  - 268 browser tests, each run in Chromium (Chrome and Edge), Firefox and WebKit (Safari), 804 runs in all, with automatic WCAG 2.2 AA checks in light and dark mode.
 - **Checks done by hand,** because a test can't stop Docker or install the app from scratch:
   - US-27 #3: stopping the database while the app runs, then starting it again.
   - US-28: `docker compose down` then `docker compose up -d`, and restarting the app.
@@ -71,12 +76,13 @@ Where the tests are (all in `src/tests/`):
 
 | Stories | Tests |
 |---|---|
-| Money maths, rounding and input checks (US-05, US-13, US-14, US-16, US-17, US-25) | `unit/money.test.ts`, `unit/bill.test.ts` |
+| Money maths, rounding, input checks and wrong-try waits (US-02, US-05, US-13, US-14, US-16, US-17, US-25) | `unit/money.test.ts`, `unit/bill.test.ts`, `unit/limits.test.ts` |
 | Server rules for every story | `api/accounts.test.ts`, `api/solo.test.ts`, `api/groups.test.ts`, `api/criteria-*.test.ts`, `api/review-fixes.test.ts`, `api/attempt-limits.test.ts` |
-| Accounts, solo bills and input messages in the browser (US-01 to US-08, US-25 to US-27, US-34, US-35) | `e2e/accounts.spec.ts`, `e2e/solo.spec.ts`, `e2e/criteria-solo.spec.ts`, `e2e/criteria-extra.spec.ts` |
-| Groups, bills, balances and settle-ups in the browser (US-09 to US-19) | `e2e/groups.spec.ts`, `e2e/criteria-groups.spec.ts` |
-| Members leaving and coming back (US-20 to US-24) | `e2e/groups.spec.ts`, `e2e/criteria-members.spec.ts` |
-| Dashboard, navigation, appearance, accessibility, feedback and unsaved changes (US-33 to US-38) | `e2e/layout.spec.ts`, `e2e/ux.spec.ts`, `e2e/criteria-members.spec.ts` |
+| Personal invites, adding people from other groups, renaming (US-10 to US-12, US-20, US-21, US-39 to US-41) | `api/invites.test.ts`, `e2e/round1-groups.spec.ts`, `e2e/round1-review.spec.ts` |
+| Accounts, solo bills and input messages in the browser (US-01 to US-08, US-25 to US-27, US-34, US-35) | `e2e/accounts.spec.ts`, `e2e/solo.spec.ts`, `e2e/criteria-solo.spec.ts`, `e2e/criteria-extra.spec.ts`, `e2e/round1-solo.spec.ts` |
+| Groups, bills, balances and settle-ups in the browser (US-09 to US-19) | `e2e/groups.spec.ts`, `e2e/criteria-groups.spec.ts`, `e2e/round1-groups.spec.ts` |
+| Members leaving and coming back (US-20 to US-23) | `e2e/groups.spec.ts`, `e2e/criteria-members.spec.ts`, `e2e/round1-members.spec.ts` |
+| Dashboard, navigation, appearance, accessibility, feedback and unsaved changes (US-33 to US-38) | `e2e/layout.spec.ts`, `e2e/ux.spec.ts`, `e2e/criteria-members.spec.ts`, `e2e/round1-members.spec.ts` |
 
 Each test's name starts with the story and criterion it proves, for example "US-07 #3".
 
@@ -94,8 +100,8 @@ Each test's name starts with the story and criterion it proves, for example "US-
 | US-08 | Open, edit and delete saved solo bills | Solo diner | J2 | Implemented |
 | US-09 | Create a group | Group member | J6 | Implemented |
 | US-10 | Add friends to a group by name | Group member | J8 | Implemented |
-| US-11 | View and copy the group's invite code | Group member | J8 | Implemented |
-| US-12 | Join a group by claiming my name | Group member | J8 | Implemented |
+| US-11 | Share a friend's own invite | Group member | J8 | Implemented |
+| US-12 | Join all my friends' groups with my own invite | Group member | J8 | Implemented |
 | US-13 | Record an equal-split group bill | Group member | J3 | Implemented |
 | US-14 | Record an itemized group bill | Group member | J4 | Implemented |
 | US-15 | Record who paid a group bill | Group member | J5 | Implemented |
@@ -107,7 +113,6 @@ Each test's name starts with the story and criterion it proves, for example "US-
 | US-21 | Leave a group | Group member | J10 | Implemented |
 | US-22 | Close out a group as the last member with an account | Group member | J11 | Implemented |
 | US-23 | Restore a removed member | Group member | J10 | Implemented |
-| US-24 | Rejoin a group with the invite code | Group member | J10 | Implemented |
 | US-25 | Get a clear message for every invalid input | Solo diner, Group member | J14 | Implemented |
 | US-26 | Carry on safely after a result or an error | Solo diner, Group member | J14 | Implemented |
 | US-27 | Keep my inputs when saving fails | Solo diner, Group member | J14 | Implemented |
@@ -119,6 +124,9 @@ Each test's name starts with the story and criterion it proves, for example "US-
 | US-36 | Use the app with a keyboard, screen reader or zoom | Solo diner, Group member | J22 | Implemented |
 | US-37 | Know what happened after every action | Solo diner, Group member | J14 | Implemented |
 | US-38 | Don't lose unsaved changes by accident | Solo diner, Group member | J14 | Implemented |
+| US-39 | Edit a group's name and currency | Group member | J6 | Implemented |
+| US-40 | Rename a member | Group member | J9 | Implemented |
+| US-41 | Add someone from my other groups | Group member | J8 | Implemented |
 | US-30 | Run the app locally from the README | Host | J17 | Implemented |
 | US-31 | Deploy the app to my own server | Host | J18 | Implemented |
 | US-32 | Run all tests with one command | Host | J19 | Implemented |
@@ -138,10 +146,11 @@ Acceptance criteria:
 4. Given "Sana" already exists, when someone signs up as "sana" or "SANA", then they see "That username is taken" (usernames aren't case-sensitive).
 5. Given a username that is blank, 2 characters or 31 characters long, or contains anything other than letters, numbers and underscore (e.g. "sana!" or "sa na"), when I sign up, then a clear message is shown and no account is created.
 6. Given a username of exactly 3 or exactly 30 characters, then it's accepted.
-7. Given a password that is blank, 7 characters or 129 characters long, when I sign up, then a clear message is shown and no account is created.
+7. Given a password that is blank or 7 characters long, when I sign up, then I see "Password must be at least 8 characters". Given 129 characters, I see "Password can be at most 128 characters". Either way no account is created, and the hint under the box reads "At least 8 characters".
 8. Given a password of exactly 8 or exactly 128 characters, including spaces and symbols, then it's accepted.
 9. Given sign-up failed (e.g. the username was taken), when I fix it and sign up again, then the account is created without reloading the page.
 10. The app never asks for an email address or phone number, and never sends email or text messages.
+11. Given any password box (sign up, log in, reset), when I press the eye button ("Show password"), then I can see what I typed, and pressing it again ("Hide password") hides it. A shown password isn't capitalised or corrected by phone keyboards.
 
 ### US-02 Log in and log out
 **As a** Solo diner or Group member, **I want** to log in with my username and password and log out when I'm done, **so that** only I can reach my records, even on a shared computer.
@@ -168,7 +177,7 @@ Acceptance criteria:
 1. Given my username, my current recovery code and a new valid password, when I reset, then I can log in with the new password, and a new recovery code is shown once with a "save this now" warning.
 2. Given I've reset my password, when I try the old recovery code again, then it no longer works.
 3. Given a wrong recovery code, or a username that doesn't exist, when I reset, then a clear message is shown and no password is changed.
-4. Given a new password that is blank, 7 characters or 129 characters long, when I reset, then a clear message is shown and the password isn't changed.
+4. Given a new password that is blank or 7 characters long, when I reset, then I see "Password must be at least 8 characters" (or "Password can be at most 128 characters" for 129), and the password isn't changed.
 5. Given 5 wrong recovery codes in a row, when I try again, then the same waits as for passwords apply, counted separately from passwords. Once the wait is over, the right code works, and the reset also clears any wait on logging in.
 
 ### US-04 Keep my bills and groups private
@@ -204,13 +213,14 @@ Acceptance criteria:
 12. Given an items subtotal of 0.01, tax 0, other charges 1,000,000.00 (amount) and tip 0, when I press Calculate, then other charges is 1,000,000.00 and the total is 1,000,000.01.
 13. Given no items, when I press Calculate, then I see "Add at least one item" and no result.
 14. Given any invalid field (see US-25), when I press Calculate, then no result is shown.
+15. Given an empty tax box, when I type 5, then the box shows "5" (not "05"), and a tax left blank counts as 0.
 
 ### US-06 Choose the currency of a solo bill
 **As a** Solo diner, **I want** to pick the currency symbol for my bill, **so that** amounts are shown the way I paid them.
 - **Job:** J15 · **Status:** Implemented
 
 Acceptance criteria:
-1. Given a new solo bill, when I open the currency picker, then it offers exactly $, €, £, ¥, ₹, Rs, ₩, ₺, R$, CHF, AED, SAR and "Other".
+1. Given a new solo bill, when I open the currency picker, then it offers exactly $, €, £, ¥, ₹, Rs, PKR, ₩, ₺, R$, CHF, AED, SAR and "Other", with PKR in capitals.
 2. Given I pick a symbol from the list, then every amount on the bill is shown with that symbol, and no currency conversion happens.
 3. Given I pick "Other" and type "kr" or "zł", then every amount is shown with that symbol.
 4. Given "Other" with a blank symbol, a symbol of 4+ characters (e.g. "abcd") or one containing a digit (e.g. "R1"), when I press Calculate or Save, then I see "Currency symbol must be 1–3 characters with no digits" and nothing is saved.
@@ -250,10 +260,10 @@ Acceptance criteria:
 - **Job:** J6 · **Status:** Implemented
 
 Acceptance criteria:
-1. Given I enter a group name and pick a currency, when I create the group, then I'm its first and only current member, an invite code is generated automatically, and the activity log records "X created the group".
-2. Given I'm choosing the group's currency, then I can pick from the default list of 12 or choose "Other" and type a symbol of 1–3 characters with no digits (same rules and message as US-06). A note tells me the currency can't be changed after the group is created.
+1. Given I enter a group name and pick a currency, when I create the group, then I'm its first and only current member, and the activity log records "X created the group".
+2. Given I'm choosing the group's currency, then I can pick from the list of 13 or choose "Other" and type a symbol of 1–3 characters with no digits (same rules and message as US-06). A note tells me I can change it later and that amounts aren't converted.
 3. Given a blank group name, or one of 51 or more characters, when I create the group, then a clear message is shown and no group is created. Names of exactly 1 and exactly 50 characters are accepted.
-4. Given a group exists, then there's no way to change its currency, either on the page or by sending requests straight to the server.
+4. Given a group exists, then its name and currency can be changed later (US-39).
 5. Given a group, then all its bills, settle-ups and balances use the group's single currency.
 
 ### US-10 Add friends to a group by name
@@ -265,32 +275,39 @@ Acceptance criteria:
 2. Given the group has 50 current members, when I add another, then I see "A group can have at most 50 members" and nobody is added.
 3. Given a blank name, or one of 31 or more characters, when I add it, then a clear message is shown and nobody is added. Names of exactly 1 and exactly 30 characters are accepted.
 4. Given "Omar" is a current member, when I add "Omar", "omar" or "OMAR", then I see "That name has already been used in this group" and nobody is added.
-5. Given "Omar" is a removed member, when I add a new "Omar" (in any letter case), then I see "That name has already been used in this group" and nobody is added. The name stays Omar's, so restoring him always gives it back.
+5. Given "Omar" is a removed member, when I add a new "Omar" (in any letter case), then I see "That name has already been used in this group" and nobody is added. The name stays Omar's while he has it, so restoring him gives it back.
 6. Given 49 current members and some removed members, when I add one more, then it succeeds, because removed members don't count toward the 50.
+7. Given I add someone new by name, then an "Invite Omar" box appears straight away offering their own invite link (US-11).
 
-### US-11 View and copy the group's invite code
-**As a** Group member, **I want** to see and copy my group's invite code, **so that** I can pass it to friends who want to take over their own name.
+### US-11 Share a friend's own invite
+**As a** Group member, **I want** each friend I add by name to have their own invite code and link that I can copy or share, **so that** they can take over their own part without picking their name from a list.
 - **Job:** J8 · **Status:** Implemented
 
 Acceptance criteria:
-1. Given I'm a current member, when I open the group's invite section, then I see the invite code and a Copy button.
-2. Given I press Copy, then the code is copied, ready to paste.
-3. Given any group, then there's no option to regenerate or change the invite code. It stays the same for the life of the group.
+1. Given a friend in the group hasn't joined yet, when I open the Members tab, then I see their own invite code next to their name (12 characters, shown in groups of four), with "Copy link" and, on phones, "Share".
+2. Given I press "Copy link", then their invite link (`…/invite/<code>`) is copied, ready to paste. Given the browser can't copy (for example over plain http on a home network), then the link is shown in a box to copy by hand.
+3. Given two friends who haven't joined, then each has a different code. Given people who have an account, then no code is shown for them.
+4. Given the same friend is in two of my groups (added from my other groups, US-41), then they have one code, shown in both groups.
+5. Given a current member who is in every group the friend is in, then they can see and share the code, not only the person who added the friend. For a friend in just one group, that's every current member.
+6. Given a current member who isn't in all of the friend's groups (so the code would let them into a group they're not in), then they see no code, only "Only someone who's in all of Omar's groups can send their invite."
+7. Given someone with an account leaves or is removed from the group, then every friend in it who hasn't joined gets a new code, and an old link shows "That invite link isn't valid. Check the code and try again." Removing someone without an account changes no codes.
+8. Given any group, then there's no group-wide invite code.
 
-### US-12 Join a group by claiming my name
-**As a** Group member, **I want** to enter a group's invite code and claim the name my friends added for me, **so that** I can see and manage my own part of the group's history.
+### US-12 Join all my friends' groups with my own invite
+**As a** Group member, **I want** to open my own invite link and create an account (or log in), **so that** every group my friends added me to is linked to my account at once.
 - **Job:** J8 · **Status:** Implemented
 
 Acceptance criteria:
-1. Given Omar creates an account and enters the group's invite code, when he chooses "I'm Omar", then his account is linked to that member, the group appears in his group list, he sees the full group history, and the activity log records "Omar claimed the name Omar".
-2. Given a valid invite code and an account that isn't in the group, when I enter it, then I can choose from all of the group's **unclaimed** members, current or removed. Removed names are marked "(removed)".
-3. Given a member already claimed by an account, then that name isn't offered, and no other account can claim it.
-4. Given my account already claims a member in this group, then I can't claim a second member in the same group.
-5. Given a valid invite code, then there's no option to add myself as a new name. Only current members add new names (US-10).
-6. Given a new account claims a removed, unclaimed name, then that member is restored and linked to the account (restore limits from US-23 apply).
-7. Given a wrong invite code, when I enter it, then I see "That invite code isn't valid" and join nothing.
-8. Given I'm already a current member, when I enter the group's invite code, then I see "You're already in this group" and nothing changes.
-9. Given a wrong code was entered, when I enter the correct code, then joining works without reloading the page.
+1. Given Ghania was added by name to two groups and opens her invite link, then she sees "Ghania, join your friends' groups" and both group names, with no list of names to pick from.
+2. Given she chooses "I'm new here" and creates an account, then both groups are linked to it at once: after saving her recovery code she lands on the Dashboard, both groups are in her list, and each group's log records "Ghania joined with their invite".
+3. Given she already has an account, when she chooses "I have an account" and logs in, then both groups are linked to that account. Given the invite can't be used (for example it was used meanwhile), then she's still logged in and sees why.
+4. Given a code has been used, when anyone opens it, then they see "Invite already used" and "This invite has already been used", with no name or group shown, and it can't be used again (sign-up with it creates no account).
+5. Given a wrong code, then I see "That invite link isn't valid. Check the code and try again." and nothing changes.
+6. Given I'm logged in and already in every group of that invite (for example, I opened a friend's link to test it), then I see that the invite is for them, with no Join button, and the code stays usable.
+7. Given one of those groups already has my account as a member, then that group is skipped, and after joining I see "You were already in Flat, so it was skipped." There the invited name shows as "already here as <my name>". Given one of my memberships was removed, then it's linked but stays removed until someone restores me (US-23): the message says so, and that group's log records "Ghania linked their account (still removed)".
+8. Given I was sent only the code, when I enter it under "Use an invite code" (in any letter case, with or without spaces or dashes, or by pasting the whole link), then I go to the same invite. Given characters other than letters and numbers, then I see "Invite codes have only letters and numbers. Check the code and try again."
+9. Given I'm already in some, but not all, of the invite's groups (logged in, or logging in from the link), then nothing is joined yet: I see "You're already in Flat. If you're not Ghania, don't join: send them this link instead.", and "Join these groups" asks "Join as Ghania?" before anything changes.
+10. Given Ghania was removed from every group she was added to, then her invite shows "That invite link isn't valid. Check the code and try again." until someone restores her.
 
 ---
 
@@ -351,7 +368,7 @@ Acceptance criteria:
 3. Given several members owe and are owed, then the suggestions use the fewest payments that bring every balance to 0.00 (largest debtor matched to largest creditor), shown as "X pays Y amount".
 4. Given every balance is 0.00, then no suggestions are shown.
 5. Given a removed member, then they don't appear in the balance list or the suggestions.
-6. Given I open a group, then the balances and suggested payments are at the top of the page, an "Add bill" button is visible, and the tabs Bills, Settle-ups, Members and Activity are below. The invite code and Removed members are on the Members tab.
+6. Given I open a group, then the balances and suggested payments are at the top of the page, side by side and lined up (same top edge), with "Edit group" and "Add bill" buttons visible, and the tabs Bills, Settle-ups, Members and Activity below. Each friend's invite and Removed members are on the Members tab.
 7. Given the suggestion "Sara pays Ali 13.00", when I press "Record this payment", then the settle-up form opens pre-filled with Sara → Ali and 13.00, and nothing is saved until I confirm. I can change the amount before confirming.
 8. Given balances are shown, then money owed to a member is green with "+" and "is owed", and money a member owes is red with "−" and "owes". Colour is never the only signal.
 
@@ -376,7 +393,7 @@ Acceptance criteria:
 2. Given I edit a bill or settle-up and save, then it's checked with the same rules as a new one, and the balances update.
 3. Given I reopen a group bill with other charges, then its value and % / amount setting are shown exactly as saved, and editing them recalculates the bill and the balances.
 4. Given I press Delete on a bill, then I'm asked to confirm. Cancel keeps it, and Confirm removes it and updates the balances.
-5. Given a bill or settle-up that includes a removed member, when I try to edit or delete it, then I see "Restore Omar to change this bill" and nothing changes.
+5. Given a bill or settle-up that includes a removed member, when I try to edit or delete it, then I see "Restore Omar to change this bill" and nothing changes. A message about Delete shows at the top of the page, next to the Delete button.
 
 ### US-19 See the group's activity log
 **As a** Group member, **I want** a log of every change in the group, **so that** I can see who did what and when.
@@ -384,10 +401,11 @@ Acceptance criteria:
 
 Acceptance criteria:
 1. Given any member adds, edits or deletes a bill or settle-up, then the activity log shows who did it, when, and what changed (e.g. "Sara edited 'Pizza night': 60.00 → 65.00").
-2. Given a member is removed, leaves, is restored or rejoins, then the log shows "X removed Omar", "Omar left", "X restored Omar" or "Omar rejoined with the invite code".
-3. Given the group is created, a member is added or a name is claimed, then the log shows "X created the group", "X added Omar" or "Omar claimed the name Omar".
+2. Given a member is removed, leaves or is restored, then the log shows "X removed Omar", "Omar left" or "X restored Omar".
+3. Given the group is created, a member is added or someone joins with their invite, then the log shows "X created the group", "X added Omar" or "Omar joined with their invite".
 4. Given any log entry, then it shows who made the change and when.
 5. Given any current member, then they can see the whole log.
+6. Given the group is renamed, its currency changes or a member is renamed, then the log shows "X renamed the group from 'A' to 'B'", "X changed the currency from $ to PKR" or "X renamed ghania to Ghania".
 
 ---
 
@@ -405,6 +423,7 @@ Acceptance criteria:
 5. Given Omar is removed, when I add a new bill or settle-up, then he isn't offered as payer, participant or settle-up person, and he isn't in the balance list or the suggestions.
 6. Given Omar is removed, when I try to edit or delete a bill or settle-up that includes him, then I see "Restore Omar to change this bill" and nothing changes.
 7. Given Omar has an account and is removed, then the group disappears from his group list right away, and opening its address shows that he no longer has access. His account and solo bills are unchanged.
+8. Given Omar has an account and is removed, then everyone in the group who hasn't joined yet gets a new invite code, so an invite link he saw can't bring him back under their name (US-11 #7).
 
 ### US-21 Leave a group
 **As a** Group member, **I want** to leave a group once I've settled up, **so that** I'm no longer part of it.
@@ -416,6 +435,7 @@ Acceptance criteria:
 3. Given I've left, then my old bills keep me as "Name (removed)", and every total and balance stays the same.
 4. Given I've left, then my account and solo bills are unchanged.
 5. Given I'm the last current member with an account, then leaving follows US-22 instead.
+6. Given I leave, then everyone in the group who hasn't joined yet gets a new invite code, so an invite link I saw can't bring me back under their name (US-11 #7).
 
 ### US-22 Close out a group as the last member with an account
 **As a** Group member, **I want** to leave a group even when I'm the last member with an account, after a clear warning, **so that** a group nobody uses is closed for good.
@@ -424,8 +444,8 @@ Acceptance criteria:
 Acceptance criteria:
 1. Given I'm the only current member with an account, when I press Leave, then I see: "You're the last member with an account. If you leave, this group and all its bills, settle-ups and history will be permanently deleted. Unsettled balances will be lost."
 2. Given that warning, when I press Cancel, then nothing changes.
-3. Given that warning, when I press Leave (whatever my balance), then the group is permanently deleted, including its members, bills, settle-ups, activity log and invite code.
-4. Given a group was deleted, then it disappears for everyone, its address shows "This group no longer exists", and its invite code is no longer valid.
+3. Given that warning, when I press Leave (whatever my balance), then the group is permanently deleted, including its members, bills, settle-ups and activity log.
+4. Given a group was deleted, then it disappears for everyone, its address shows "This group no longer exists", and an invite that only led to that group is no longer valid.
 5. Given a group was deleted, then my account, my solo bills and my other groups are unchanged.
 6. Given any group, then there's no separate "delete group" button. Deletion only happens this way.
 
@@ -439,16 +459,8 @@ Acceptance criteria:
 3. Given Omar had an account, when he's restored, then his access to the group returns.
 4. Given Omar is restored, then bills and settle-ups that include him can be edited and deleted again.
 5. Given the group already has 50 current members, when anyone tries to restore Omar, then a clear message is shown and he stays removed.
-6. Given Omar is restored, then he gets his name "Omar" back. No other member can have taken it, because names are never reused within a group.
-
-### US-24 Rejoin a group with the invite code
-**As a** Group member, **I want** to rejoin a group I was removed from by entering its invite code, **so that** I can come back without waiting for someone to restore me.
-- **Job:** J10 · **Status:** Implemented
-
-Acceptance criteria:
-1. Given Omar has an account and was removed, when he enters the group's invite code, then he's restored automatically with his full history and access, and the log records "Omar rejoined with the invite code".
-2. Given the group has 50 current members, when Omar enters the invite code, then a clear message is shown and he stays removed.
-3. Given a group was deleted (US-22), when its old invite code is entered, then I see "That invite code isn't valid".
+6. Given Omar is restored, then he keeps his name. Nobody else can have taken it while he had it.
+7. Given Omar was removed, then Restore is the only way back in: his used invite can't bring him back.
 
 ---
 
@@ -477,6 +489,7 @@ Acceptance criteria:
 16. Given invalid data is sent straight to the server, bypassing the page, then the server rejects it and saves nothing.
 17. Given I type "1,000.50" or "1000.50" in a money field, then both are accepted as 1000.50.
 18. Given I type "1.000,50" (European style) or a misplaced comma such as "10,00", then the field's normal message is shown and no result.
+19. Given any form (sign up, reset password, create or edit a group, add or rename a member, record a payment, use an invite code, or an invite page), when I edit a field that's showing its message, then that message disappears straight away. Messages on other fields stay until those are edited.
 
 ### US-26 Carry on safely after a result or an error
 **As a** Solo diner or Group member, **I want** results and errors to update correctly as I keep working, **so that** I never act on an out-of-date figure.
@@ -491,6 +504,9 @@ Acceptance criteria:
 6. Given valid inputs, when I press Calculate, then the results appear below the form, on every screen size, and the page scrolls down to them.
 7. Given results are showing, when I change any input, then the results area goes back to "Press Calculate to see results".
 8. Given a bill in Rs with a total of 1234567.5 and a share of 400, then the results show "Rs 1,234,567.50" and "Rs 400.00". In $ they show "$1,234,567.50" and "$400.00".
+9. Given a field is showing an error, when I edit that field, then its error disappears straight away, before I press Calculate.
+10. Given results are showing, then each % line shows its rate, e.g. "Tax (5%)", "Other charges (10%)", "Tip (15% of items)" or "Tip (15% of items + tax)".
+11. Given a bill form, then the "Save bill" button sits under the results, with any message about saving just above it. When the server rejects a field, the cursor moves to that field.
 
 ### US-27 Keep my inputs when saving fails
 **As a** Solo diner or Group member, **I want** my entries kept if a save fails, **so that** I don't have to type everything again.
@@ -534,17 +550,19 @@ Acceptance criteria:
 6. Given the Dashboard, then "New solo bill" and "New group bill" buttons are visible.
 7. Given I have no groups and no solo bills, then each section shows a short explanation and a button for the next step instead of an empty space.
 8. Given every balance across my groups is 0.00, then the Dashboard says I owe nothing and am owed nothing.
+9. Given I owe or am owed money, then under "You owe" and "You're owed" I see who: e.g. "To Ali" with "Rs 400.00" and the group's name, which opens that group.
 
 ### US-34 Find my way on a computer or a phone
 **As a** Solo diner or Group member, **I want** clear navigation that works on a big screen and a small one, **so that** I can use whichever device I have with me.
 - **Job:** J16 · **Status:** Implemented
 
 Acceptance criteria:
-1. Given a screen 1280 px wide, then a left sidebar with Dashboard, Solo bills, Groups and Account is always visible.
+1. Given a screen 1280 px wide, then a left sidebar with Dashboard, Solo bills, Groups and Settings is always visible.
 2. Given a screen 375 px wide, then the sidebar is replaced by a menu button at the top, which opens the same four links.
 3. Given any page at any width from 360 px up, then all content fits with no sideways scrolling of the page.
 4. Given I'm on a page, then its sidebar or menu link is highlighted, so I can see where I am.
-5. Given the Account page, then it shows my username, the appearance setting and a Log out button.
+5. Given the Settings page, then it shows my username, the appearance setting and a Log out button.
+6. Given any page, then the app is called "Bill Splitter" everywhere (browser tab, sidebar, log-in page).
 
 ### US-35 Choose light or dark appearance
 **As a** Solo diner or Group member, **I want** the app to be light or dark to suit my surroundings, **so that** figures are comfortable to read day or night.
@@ -552,7 +570,7 @@ Acceptance criteria:
 
 Acceptance criteria:
 1. Given the appearance setting is "Device" (the default) and my device is in dark mode, then the app is dark. When the device switches to light mode, the app follows.
-2. Given I choose "Light" or "Dark" on the Account page, then the app uses that look regardless of my device setting.
+2. Given I choose "Light" or "Dark" on the Settings page, then the app uses that look regardless of my device setting.
 3. Given I chose "Dark", when I log out and back in (on any computer), then the app is still dark, because the choice is saved with my account.
 4. Given either theme, then all text has at least 4.5:1 contrast, and owed / owes amounts keep their "+" / "−" and words as well as colour.
 
@@ -590,6 +608,41 @@ Acceptance criteria:
 3. Given that question, when I press Leave, then I go to the other page and the changes are discarded. Nothing is saved as a draft.
 4. Given I've changed a bill form without saving, when I close or reload the browser tab, then the browser's own "Leave site?" prompt appears.
 5. Given I haven't changed anything, or I've just saved, when I leave the form, then no warning appears.
+
+---
+
+### US-39 Edit a group's name and currency
+**As a** Group member, **I want** to rename a group or change its currency, **so that** I can fix a mistake or follow a change of plan.
+- **Job:** J6 · **Status:** Implemented
+
+Acceptance criteria:
+1. Given I'm a current member, when I press "Edit group", change the name and press "Save changes", then the group has the new name everywhere and the log records "X renamed the group from 'A' to 'B'".
+2. Given I change the currency (e.g. $ to PKR), then every amount in the group shows the new symbol, nothing is converted, and the log records "X changed the currency from $ to PKR".
+3. Given a blank or 51-character name, or a bad currency symbol, then the same messages as when creating a group are shown and nothing changes.
+4. Given someone who isn't a current member, then they can't change the group, even by sending requests straight to the server.
+
+### US-40 Rename a member
+**As a** Group member, **I want** to change a member's name, **so that** typos like "ghania" can be fixed.
+- **Job:** J9 · **Status:** Implemented
+
+Acceptance criteria:
+1. Given I press "Rename" next to a member, type a new name and press "Save name", then the new name shows everywhere, including old bills and balances, and the log records "X renamed ghania to Ghania".
+2. Given the new name matches another member in any letter case, then I see "That name has already been used in this group" and nothing changes.
+3. Given a member was renamed, then their old name is free and can be given to someone else.
+4. Given a blank or 31-character name, then I see "Name must be 1–30 characters".
+5. Given I rename someone who hasn't joined yet, then their invite page and the lists in my other groups show the new name.
+6. Given the rename box is open, when I press Save name, Cancel or Esc, then it closes and the cursor goes back to that member's Rename button.
+
+### US-41 Add someone from my other groups
+**As a** Group member, **I want** to add a friend who's already in another of my groups, **so that** they're the same person everywhere and one invite covers all their groups.
+- **Job:** J8 · **Status:** Implemented
+
+Acceptance criteria:
+1. Given people are in my other groups, then the Members tab shows "Or add someone from your other groups", listing each current member of those groups once, by their name (never their username), with the groups they're in, and leaving out people already in this group. Someone who hasn't joined is listed only when I'm in all of their groups, so I can send them their invite.
+2. Given I pick someone who hasn't joined yet, then they're added as the same person, with the same invite code in both groups ("Their invite link now covers this group too."), and the cursor moves to their "Invite" box. Given someone who could see that code isn't in this group, then the code changes, and the box says "Their invite link has changed, so send them this new one."
+3. Given I pick someone who has an account, then they get access to this group straight away.
+4. Given their usual name clashes with someone in this group, then a "Name in this group" box appears with "That name has already been used in this group", and I can add them under a different name.
+5. Given people who aren't in any of my groups, then they're never offered, and they can't be added by sending requests straight to the server. The list can only be asked for about a group I'm in.
 
 ---
 

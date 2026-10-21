@@ -194,4 +194,37 @@ CREATE TABLE attempt_limits (
 CREATE INDEX attempt_limits_updated_idx ON attempt_limits(updated_at);
 `,
   },
+  {
+    // Personal invite codes: each person added by name has their own code, and
+    // the same person can be in several groups. The group-wide code goes away.
+    version: '005_personal_invites',
+    sql: `
+CREATE TABLE persons (
+  id BIGSERIAL PRIMARY KEY,
+  name TEXT NOT NULL,
+  invite_code TEXT UNIQUE,
+  account_id BIGINT REFERENCES accounts(id) ON DELETE SET NULL,
+  created_by BIGINT REFERENCES accounts(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE members ADD COLUMN person_id BIGINT REFERENCES persons(id) ON DELETE SET NULL;
+CREATE INDEX members_person_idx ON members(person_id);
+
+-- Every existing name-only member becomes its own person (codes are made when first shown).
+ALTER TABLE persons ADD COLUMN source_member BIGINT;
+INSERT INTO persons (name, created_by, source_member)
+  SELECT m.name,
+         (SELECT o.account_id FROM members o WHERE o.group_id = m.group_id AND o.account_id IS NOT NULL ORDER BY o.id LIMIT 1),
+         m.id
+    FROM members m WHERE m.account_id IS NULL;
+UPDATE members m SET person_id = p.id FROM persons p WHERE p.source_member = m.id;
+ALTER TABLE persons DROP COLUMN source_member;
+
+ALTER TABLE groups DROP COLUMN invite_code;
+
+-- PKR is now a listed symbol, written in capitals.
+UPDATE groups SET currency = 'PKR' WHERE lower(currency) = 'pkr';
+UPDATE solo_bills SET currency = 'PKR' WHERE lower(currency) = 'pkr';
+`,
+  },
 ];

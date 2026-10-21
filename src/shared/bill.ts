@@ -67,7 +67,9 @@ function checkCharge(
   percentMessage: string,
 ): Charge | string {
   const mode = input.mode === 'percent' ? 'percent' : 'amount';
-  const value = parseHundredths(String(input.value ?? ''));
+  const raw = String(input.value ?? '').trim();
+  // A blank tax or tip means 0.
+  const value = raw === '' ? 0 : parseHundredths(raw);
   const max = mode === 'percent' ? MAX_PERCENT_BP : MAX_FIELD_CENTS;
   if (value === null || value > max) return mode === 'percent' ? percentMessage : amountMessage;
   return { mode, value };
