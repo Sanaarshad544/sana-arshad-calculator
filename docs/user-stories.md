@@ -11,7 +11,7 @@ How the Bill Splitting Calculator helps each role get their jobs done. Every sto
   - boundary values
   - very large and very small numbers
   - what happens when the user carries on after a result or an error
-- **Status:** **Implemented** means the running app does exactly what every criterion says today. **Not implemented** means it doesn't yet. No app code exists yet, so every story is currently **Not implemented**.
+- **Status:** **Implemented** means the running app does exactly what every criterion says today, proven by the checks listed under "Implementation progress". **Not implemented** means it doesn't yet, or not every criterion is proven.
 - **Money format:** amounts are shown with 2 decimals and the bill's or group's currency symbol. The examples below leave out the symbol.
 
 ## Shared rules used by many stories
@@ -19,7 +19,7 @@ How the Bill Splitting Calculator helps each role get their jobs done. Every sto
 These rules come from the spec and apply wherever a story mentions them.
 
 - **Money fields** (item prices, settle-up amounts): 0.01–1,000,000.00, at most 2 decimal places. No negatives, letters, blanks or extra decimals.
-- **Per-field limit:** the 1,000,000.00 limit applies to each field on its own. A bill's food subtotal and grand total may be larger.
+- **Per-field limit:** the 1,000,000.00 limit applies to each field on its own. A bill's items subtotal and grand total may be larger.
 - **Items:** every bill (solo, equal or itemized) needs 1–200 items. The largest possible grand total is 1,000,000,000.00, and it is still exact to the cent.
 - **Names** (spaces at the start and end are trimmed before checking):
   - Group name: required, 1–50 characters.
@@ -32,11 +32,11 @@ These rules come from the spec and apply wherever a story mentions them.
   - As an amount: 0.01–1,000,000.00, at most 2 decimal places.
   - As a %: 0.01–100, at most 2 decimal places.
 - **What each % is of:**
-  - Tax % and other charges % are always of the **food subtotal** only.
+  - Tax % and other charges % are always of the **items subtotal** only.
   - Tax is never charged on other charges or tip.
-  - A % tip has a per-bill **"tip on"** option: **food only (default)** or **food + tax**. A tip is never calculated on other charges.
-- **Rounding:** tax, other charges and tip are each worked out separately in cents. Any % result is rounded half-up to the cent, so it can be 0.00. A "food + tax" tip uses the already-rounded tax. All money math uses whole cents, never floating-point.
-- **Grand total** = food subtotal + tax + other charges + tip.
+  - A % tip has a per-bill **"tip on"** option: **items only (default)** or **items + tax**. A tip is never calculated on other charges.
+- **Rounding:** tax, other charges and tip are each worked out separately in cents. Any % result is rounded half-up to the cent, so it can be 0.00. An "items + tax" tip uses the already-rounded tax. All money math uses whole cents, never floating-point.
+- **Grand total** = items subtotal + tax + other charges + tip.
 - **Exactness:** for every bill, the shares add up exactly to the grand total.
 - **Results:** totals appear only when **Calculate** is pressed. Changing any input hides the old result until Calculate is pressed again.
 - **Currency:** a display symbol only, with no conversion. Choose from the default list of 12 ($, €, £, ¥, ₹, Rs, ₩, ₺, R$, CHF, AED, SAR), or choose "Other" and type a symbol of 1–3 characters with no digits.
@@ -44,7 +44,7 @@ These rules come from the spec and apply wherever a story mentions them.
   - Username: 3–30 characters (letters, numbers, underscore), not case-sensitive.
   - Password: 8–128 characters, any characters.
   - A session ends on Log out or after 30 days without use.
-  - There is no limit on failed login or recovery-code attempts.
+  - **Wrong tries:** after 5 wrong passwords in a row for a username, each next try must wait: 30 seconds, then 1, 2 and 5 minutes, then 15 minutes for every try after that. Nobody is ever locked out: once the wait is over, the right password works. The count starts again after a successful login, or after a day without tries. Recovery codes are counted separately in the same way.
 - **Group size:** 1–50 **current** members. Removed members don't count.
 - **Language and number display:**
   - All text is in English.
@@ -53,48 +53,75 @@ These rules come from the spec and apply wherever a story mentions them.
   - Typing "1,000.50" is accepted as 1000.50, while European style ("1.000,50") is rejected.
 - **Layout:** desktop-first, and fully usable on phones down to 360 px wide.
 
+## Implementation progress
+
+- **Last checked:** 21 Oct 2026, against the code in `src/`.
+- **Implemented:** all 38 stories.
+- **How it was checked:** `npm test` (run from `src/`) passed twice in a row:
+  - 190 unit and server tests.
+  - 154 browser tests, each run in Chromium (Chrome and Edge), Firefox and WebKit (Safari), 462 runs in all, with automatic WCAG 2.2 AA checks in light and dark mode.
+- **Checks done by hand,** because a test can't stop Docker or install the app from scratch:
+  - US-27 #3: stopping the database while the app runs, then starting it again.
+  - US-28: `docker compose down` then `docker compose up -d`, and restarting the app.
+  - US-30: a fresh copy set up by following the README, and the "Can't reach the database" message.
+  - US-31: the production build, its secure login cookie, and a schema update applied to a database that already had data.
+  - US-32: real data unchanged after `npm test`, and the database-down message from `npm test`.
+
+Where the tests are (all in `src/tests/`):
+
+| Stories | Tests |
+|---|---|
+| Money maths, rounding and input checks (US-05, US-13, US-14, US-16, US-17, US-25) | `unit/money.test.ts`, `unit/bill.test.ts` |
+| Server rules for every story | `api/accounts.test.ts`, `api/solo.test.ts`, `api/groups.test.ts`, `api/criteria-*.test.ts`, `api/review-fixes.test.ts`, `api/attempt-limits.test.ts` |
+| Accounts, solo bills and input messages in the browser (US-01 to US-08, US-25 to US-27, US-34, US-35) | `e2e/accounts.spec.ts`, `e2e/solo.spec.ts`, `e2e/criteria-solo.spec.ts`, `e2e/criteria-extra.spec.ts` |
+| Groups, bills, balances and settle-ups in the browser (US-09 to US-19) | `e2e/groups.spec.ts`, `e2e/criteria-groups.spec.ts` |
+| Members leaving and coming back (US-20 to US-24) | `e2e/groups.spec.ts`, `e2e/criteria-members.spec.ts` |
+| Dashboard, navigation, appearance, accessibility, feedback and unsaved changes (US-33 to US-38) | `e2e/layout.spec.ts`, `e2e/ux.spec.ts`, `e2e/criteria-members.spec.ts` |
+
+Each test's name starts with the story and criterion it proves, for example "US-07 #3".
+
 ## Story list
 
 | ID | Story | Role | Job | Status |
 |---|---|---|---|---|
-| US-01 | Create an account | Solo diner, Group member | J12 | Not implemented |
-| US-02 | Log in and log out | Solo diner, Group member | J12 | Not implemented |
-| US-03 | Reset a forgotten password with a recovery code | Solo diner, Group member | J13 | Not implemented |
-| US-04 | Keep my bills and groups private | Solo diner, Group member | J12 | Not implemented |
-| US-05 | Total a solo bill | Solo diner | J1 | Not implemented |
-| US-06 | Choose the currency of a solo bill | Solo diner | J15 | Not implemented |
-| US-07 | Save a solo bill to my history | Solo diner | J2 | Not implemented |
-| US-08 | Open, edit and delete saved solo bills | Solo diner | J2 | Not implemented |
-| US-09 | Create a group | Group member | J6 | Not implemented |
-| US-10 | Add friends to a group by name | Group member | J8 | Not implemented |
-| US-11 | View and copy the group's invite code | Group member | J8 | Not implemented |
-| US-12 | Join a group by claiming my name | Group member | J8 | Not implemented |
-| US-13 | Record an equal-split group bill | Group member | J3 | Not implemented |
-| US-14 | Record an itemized group bill | Group member | J4 | Not implemented |
-| US-15 | Record who paid a group bill | Group member | J5 | Not implemented |
-| US-16 | See balances and suggested payments | Group member | J6 | Not implemented |
-| US-17 | Record a settle-up | Group member | J7 | Not implemented |
-| US-18 | Edit and delete group bills and settle-ups | Group member | J6 | Not implemented |
-| US-19 | See the group's activity log | Group member | J9 | Not implemented |
-| US-20 | Remove a member from a group | Group member | J10 | Not implemented |
-| US-21 | Leave a group | Group member | J10 | Not implemented |
-| US-22 | Close out a group as the last member with an account | Group member | J11 | Not implemented |
-| US-23 | Restore a removed member | Group member | J10 | Not implemented |
-| US-24 | Rejoin a group with the invite code | Group member | J10 | Not implemented |
-| US-25 | Get a clear message for every invalid input | Solo diner, Group member | J14 | Not implemented |
-| US-26 | Carry on safely after a result or an error | Solo diner, Group member | J14 | Not implemented |
-| US-27 | Keep my inputs when saving fails | Solo diner, Group member | J14 | Not implemented |
-| US-28 | Keep my records after a restart | Solo diner, Group member | J2, J6 | Not implemented |
-| US-29 | Use the app in my usual browser | Solo diner, Group member | J16 | Not implemented |
-| US-33 | See my money at a glance on the Dashboard | Solo diner, Group member | J20 | Not implemented |
-| US-34 | Find my way on a computer or a phone | Solo diner, Group member | J16 | Not implemented |
-| US-35 | Choose light or dark appearance | Solo diner, Group member | J21 | Not implemented |
-| US-36 | Use the app with a keyboard, screen reader or zoom | Solo diner, Group member | J22 | Not implemented |
-| US-37 | Know what happened after every action | Solo diner, Group member | J14 | Not implemented |
-| US-38 | Don't lose unsaved changes by accident | Solo diner, Group member | J14 | Not implemented |
-| US-30 | Run the app locally from the README | Host | J17 | Not implemented |
-| US-31 | Deploy the app to my own server | Host | J18 | Not implemented |
-| US-32 | Run all tests with one command | Host | J19 | Not implemented |
+| US-01 | Create an account | Solo diner, Group member | J12 | Implemented |
+| US-02 | Log in and log out | Solo diner, Group member | J12 | Implemented |
+| US-03 | Reset a forgotten password with a recovery code | Solo diner, Group member | J13 | Implemented |
+| US-04 | Keep my bills and groups private | Solo diner, Group member | J12 | Implemented |
+| US-05 | Total a solo bill | Solo diner | J1 | Implemented |
+| US-06 | Choose the currency of a solo bill | Solo diner | J15 | Implemented |
+| US-07 | Save a solo bill to my history | Solo diner | J2 | Implemented |
+| US-08 | Open, edit and delete saved solo bills | Solo diner | J2 | Implemented |
+| US-09 | Create a group | Group member | J6 | Implemented |
+| US-10 | Add friends to a group by name | Group member | J8 | Implemented |
+| US-11 | View and copy the group's invite code | Group member | J8 | Implemented |
+| US-12 | Join a group by claiming my name | Group member | J8 | Implemented |
+| US-13 | Record an equal-split group bill | Group member | J3 | Implemented |
+| US-14 | Record an itemized group bill | Group member | J4 | Implemented |
+| US-15 | Record who paid a group bill | Group member | J5 | Implemented |
+| US-16 | See balances and suggested payments | Group member | J6 | Implemented |
+| US-17 | Record a settle-up | Group member | J7 | Implemented |
+| US-18 | Edit and delete group bills and settle-ups | Group member | J6 | Implemented |
+| US-19 | See the group's activity log | Group member | J9 | Implemented |
+| US-20 | Remove a member from a group | Group member | J10 | Implemented |
+| US-21 | Leave a group | Group member | J10 | Implemented |
+| US-22 | Close out a group as the last member with an account | Group member | J11 | Implemented |
+| US-23 | Restore a removed member | Group member | J10 | Implemented |
+| US-24 | Rejoin a group with the invite code | Group member | J10 | Implemented |
+| US-25 | Get a clear message for every invalid input | Solo diner, Group member | J14 | Implemented |
+| US-26 | Carry on safely after a result or an error | Solo diner, Group member | J14 | Implemented |
+| US-27 | Keep my inputs when saving fails | Solo diner, Group member | J14 | Implemented |
+| US-28 | Keep my records after a restart | Solo diner, Group member | J2, J6 | Implemented |
+| US-29 | Use the app in my usual browser | Solo diner, Group member | J16 | Implemented |
+| US-33 | See my money at a glance on the Dashboard | Solo diner, Group member | J20 | Implemented |
+| US-34 | Find my way on a computer or a phone | Solo diner, Group member | J16 | Implemented |
+| US-35 | Choose light or dark appearance | Solo diner, Group member | J21 | Implemented |
+| US-36 | Use the app with a keyboard, screen reader or zoom | Solo diner, Group member | J22 | Implemented |
+| US-37 | Know what happened after every action | Solo diner, Group member | J14 | Implemented |
+| US-38 | Don't lose unsaved changes by accident | Solo diner, Group member | J14 | Implemented |
+| US-30 | Run the app locally from the README | Host | J17 | Implemented |
+| US-31 | Deploy the app to my own server | Host | J18 | Implemented |
+| US-32 | Run all tests with one command | Host | J19 | Implemented |
 
 ---
 
@@ -102,7 +129,7 @@ These rules come from the spec and apply wherever a story mentions them.
 
 ### US-01 Create an account
 **As a** Solo diner or Group member, **I want** to create an account with a username and password, **so that** my bills and groups are kept for me and nobody else.
-- **Job:** J12 · **Status:** Not implemented
+- **Job:** J12 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given a username nobody has used and a valid password, when I sign up, then my account is created, I'm logged in, and a one-time recovery code is shown with a "save this now" warning.
@@ -118,7 +145,7 @@ Acceptance criteria:
 
 ### US-02 Log in and log out
 **As a** Solo diner or Group member, **I want** to log in with my username and password and log out when I'm done, **so that** only I can reach my records, even on a shared computer.
-- **Job:** J12 · **Status:** Not implemented
+- **Job:** J12 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given a correct username and password, when I log in, then I'm logged in and see my own bills and groups.
@@ -126,26 +153,27 @@ Acceptance criteria:
 3. Given a username that doesn't exist, when I log in, then I see the same message, "Username or password is incorrect", which never says whether the username or the password was wrong.
 4. Given a failed login, when I enter the correct details and log in again, then I'm logged in without reloading the page.
 5. Given my account is "Sana", when I log in as "sana" or "SANA" with the right password, then I'm logged in.
-6. Given 20 wrong passwords in a row, when I then enter the correct one, then I'm logged in. There's no limit on attempts.
+6. Given 5 wrong passwords in a row, when I try again within 30 seconds, even with the right password, then I see "Too many wrong tries. Wait 30 seconds and try again." and nothing is checked.
 7. Given I'm logged in, when I press Log out, then I'm logged out at once, and opening any bill or group page sends me to the login page.
 8. Given I've used the app within the last 30 days, when I return, then I'm still logged in.
 9. Given I haven't used the app for 30 days, when I return, then I must log in again.
+10. Given I keep entering wrong passwords, then the waits grow to 1 minute, 2 minutes, 5 minutes, then 15 minutes for every try after that. Once a wait is over, the right password logs me in, and the count starts again.
+11. Given my username is waiting, then other usernames can still log in at once. The same wait applies to usernames that don't exist, so the wait never reveals which usernames are real.
 
 ### US-03 Reset a forgotten password with a recovery code
 **As a** Solo diner or Group member, **I want** to set a new password using my recovery code, **so that** I can get back into my account without email or anyone's help.
-- **Job:** J13 · **Status:** Not implemented
+- **Job:** J13 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given my username, my current recovery code and a new valid password, when I reset, then I can log in with the new password, and a new recovery code is shown once with a "save this now" warning.
 2. Given I've reset my password, when I try the old recovery code again, then it no longer works.
 3. Given a wrong recovery code, or a username that doesn't exist, when I reset, then a clear message is shown and no password is changed.
 4. Given a new password that is blank, 7 characters or 129 characters long, when I reset, then a clear message is shown and the password isn't changed.
-5. Given many wrong recovery codes in a row, when I then enter the right one, then the reset works. There's no limit on attempts.
-6. Given I've lost both my password and my recovery code, then the account can't be recovered. My names in groups stay as they were, and a new account can claim a name again through the group's invite code (US-12, US-24).
+5. Given 5 wrong recovery codes in a row, when I try again, then the same waits as for passwords apply, counted separately from passwords. Once the wait is over, the right code works, and the reset also clears any wait on logging in.
 
 ### US-04 Keep my bills and groups private
 **As a** Solo diner or Group member, **I want** my solo bills to be visible only to me and my groups only to their current members, **so that** nobody else can read or change my money records.
-- **Job:** J12 · **Status:** Not implemented
+- **Job:** J12 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given I'm logged out, when I open any bill or group page (including by typing its address), then I'm sent to the login page and no data is shown.
@@ -159,27 +187,27 @@ Acceptance criteria:
 
 ### US-05 Total a solo bill
 **As a** Solo diner, **I want** to enter my bill's items, tax, other charges and tip and see the exact total, **so that** I pay the right amount.
-- **Job:** J1 · **Status:** Not implemented
+- **Job:** J1 · **Status:** Implemented
 
 Acceptance criteria:
-1. Given items 12.50 and 7.50, tax 10%, other charges blank and tip 15% on food, when I press Calculate, then I see subtotal 20.00, tax 2.00, other charges 0.00, tip 3.00 and total 25.00.
-2. Given items 12.50 and 7.50, tax 10%, other charges 5% and tip 15% on food, when I press Calculate, then I see subtotal 20.00, tax 2.00, other charges 1.00, tip 3.00 and total 26.00.
-3. Given food 100.00, tax 10.00 (amount), other charges blank and tip 15% on food + tax, when I press Calculate, then the tip is 16.50 and the total is 126.50.
-4. Given food 100.00, tax 10.00 (amount), other charges 7.50 (amount) and tip 15% on food + tax, when I press Calculate, then other charges is 7.50, the tip is 16.50 (other charges are not tipped on), and the total is 134.00.
-5. Given food 100.00, tax 10% and other charges 10%, when I press Calculate, then other charges is 10.00 (a % of the food only, not of food + tax).
-6. Given food 33.33 and other charges 12.5%, when I press Calculate, then other charges is 4.17 (4.16625 rounded half-up).
-7. Given food 20.00 and tip 12.5%, then the tip is 2.50. Given food 20.00 and tax 8.25%, then the tax is 1.65.
-8. Given food 0.01 and other charges 5%, then other charges is 0.00 (rounded half-up) and no error is shown.
+1. Given items 12.50 and 7.50, tax 10%, other charges blank and tip 15% on items, when I press Calculate, then I see subtotal 20.00, tax 2.00, other charges 0.00, tip 3.00 and total 25.00.
+2. Given items 12.50 and 7.50, tax 10%, other charges 5% and tip 15% on items, when I press Calculate, then I see subtotal 20.00, tax 2.00, other charges 1.00, tip 3.00 and total 26.00.
+3. Given an items subtotal of 100.00, tax 10.00 (amount), other charges blank and tip 15% on items + tax, when I press Calculate, then the tip is 16.50 and the total is 126.50.
+4. Given an items subtotal of 100.00, tax 10.00 (amount), other charges 7.50 (amount) and tip 15% on items + tax, when I press Calculate, then other charges is 7.50, the tip is 16.50 (other charges are not tipped on), and the total is 134.00.
+5. Given an items subtotal of 100.00, tax 10% and other charges 10%, when I press Calculate, then other charges is 10.00 (a % of the items only, not of items + tax).
+6. Given an items subtotal of 33.33 and other charges 12.5%, when I press Calculate, then other charges is 4.17 (4.16625 rounded half-up).
+7. Given an items subtotal of 20.00 and tip 12.5%, then the tip is 2.50. Given an items subtotal of 20.00 and tax 8.25%, then the tax is 1.65.
+8. Given an items subtotal of 0.01 and other charges 5%, then other charges is 0.00 (rounded half-up) and no error is shown.
 9. Given other charges 0 or 0.00, then it's treated as "no other charges", shows 0.00, and causes no error.
 10. Given tip 0, then the tip shows 0.00 with no error.
-11. Given a new bill, then the "tip on" option starts at food only.
-12. Given food 0.01, tax 0, other charges 1,000,000.00 (amount) and tip 0, when I press Calculate, then other charges is 1,000,000.00 and the total is 1,000,000.01.
+11. Given a new bill, then the "tip on" option starts at items only.
+12. Given an items subtotal of 0.01, tax 0, other charges 1,000,000.00 (amount) and tip 0, when I press Calculate, then other charges is 1,000,000.00 and the total is 1,000,000.01.
 13. Given no items, when I press Calculate, then I see "Add at least one item" and no result.
 14. Given any invalid field (see US-25), when I press Calculate, then no result is shown.
 
 ### US-06 Choose the currency of a solo bill
 **As a** Solo diner, **I want** to pick the currency symbol for my bill, **so that** amounts are shown the way I paid them.
-- **Job:** J15 · **Status:** Not implemented
+- **Job:** J15 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given a new solo bill, when I open the currency picker, then it offers exactly $, €, £, ¥, ₹, Rs, ₩, ₺, R$, CHF, AED, SAR and "Other".
@@ -193,7 +221,7 @@ Acceptance criteria:
 
 ### US-07 Save a solo bill to my history
 **As a** Solo diner, **I want** to save a bill and see it in my history, **so that** I have a record of what I spent.
-- **Job:** J2 · **Status:** Not implemented
+- **Job:** J2 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given a valid solo bill, when I save it, then it appears at the top of my history (newest first) showing its name, date, currency and total.
@@ -204,7 +232,7 @@ Acceptance criteria:
 
 ### US-08 Open, edit and delete saved solo bills
 **As a** Solo diner, **I want** to reopen, fix or remove a saved bill, **so that** my record stays accurate.
-- **Job:** J2 · **Status:** Not implemented
+- **Job:** J2 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given a saved solo bill, when I open it, then every input and result is shown exactly as saved, including other charges and its % / amount setting, and the "tip on" setting.
@@ -219,7 +247,7 @@ Acceptance criteria:
 
 ### US-09 Create a group
 **As a** Group member, **I want** to create a group for a circle of friends, **so that** we can keep shared costs in one place over time.
-- **Job:** J6 · **Status:** Not implemented
+- **Job:** J6 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given I enter a group name and pick a currency, when I create the group, then I'm its first and only current member, an invite code is generated automatically, and the activity log records "X created the group".
@@ -230,7 +258,7 @@ Acceptance criteria:
 
 ### US-10 Add friends to a group by name
 **As a** Group member, **I want** to add a friend to my group by name only, **so that** I can include them in bills even if they never create an account.
-- **Job:** J8 · **Status:** Not implemented
+- **Job:** J8 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given I add a name-only member "Omar", then Omar can immediately be ticked as a participant, and chosen as the payer of a bill he takes part in, and the activity log records "X added Omar".
@@ -242,7 +270,7 @@ Acceptance criteria:
 
 ### US-11 View and copy the group's invite code
 **As a** Group member, **I want** to see and copy my group's invite code, **so that** I can pass it to friends who want to take over their own name.
-- **Job:** J8 · **Status:** Not implemented
+- **Job:** J8 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given I'm a current member, when I open the group's invite section, then I see the invite code and a Copy button.
@@ -251,7 +279,7 @@ Acceptance criteria:
 
 ### US-12 Join a group by claiming my name
 **As a** Group member, **I want** to enter a group's invite code and claim the name my friends added for me, **so that** I can see and manage my own part of the group's history.
-- **Job:** J8 · **Status:** Not implemented
+- **Job:** J8 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given Omar creates an account and enters the group's invite code, when he chooses "I'm Omar", then his account is linked to that member, the group appears in his group list, he sees the full group history, and the activity log records "Omar claimed the name Omar".
@@ -270,32 +298,32 @@ Acceptance criteria:
 
 ### US-13 Record an equal-split group bill
 **As a** Group member, **I want** to record a group bill split evenly between the people who took part, **so that** each pays an equal share that adds up exactly to the bill.
-- **Job:** J3 · **Status:** Not implemented
+- **Job:** J3 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given a group of 10 members, when I add a bill with 5 participants, paid by one of them, then only those 5 are charged and the other 5 members' balances don't change.
 2. Given a grand total of 100.00 and 3 participants, when I press Calculate, then the shares are 33.34 / 33.33 / 33.33, the first participant in list order is marked as paying the extra cent, and the shares add up to 100.00.
-3. Given food 90.00, tax 0, other charges 10% and tip 0, split between 3 participants, when I press Calculate, then other charges is 9.00, the grand total is 99.00, and each share is 33.00.
-4. Given food 10.00 and other charges 0.01 (amount), split between 2 participants, then the grand total is 10.01 and the shares are 5.01 and 5.00.
+3. Given an items subtotal of 90.00, tax 0, other charges 10% and tip 0, split between 3 participants, when I press Calculate, then other charges is 9.00, the grand total is 99.00, and each share is 33.00.
+4. Given an items subtotal of 10.00 and other charges 0.01 (amount), split between 2 participants, then the grand total is 10.01 and the shares are 5.01 and 5.00.
 5. Given a grand total of 0.01 split between 2 participants, then the shares are 0.01 and 0.00.
-6. Given food 1,000,000.00, tax 0, other charges blank and a 100% tip on food, split between 50 participants, then the grand total is 2,000,000.00, each share is 40,000.00, and the shares add up to the total.
-7. Given food 1,000,000.00, tax 0, other charges 1,000,000.00 (amount) and tip 0, split between 3 participants, then the grand total is 2,000,000.00 and the shares are 666,666.67 / 666,666.67 / 666,666.66.
+6. Given an items subtotal of 1,000,000.00, tax 0, other charges blank and a 100% tip on items, split between 50 participants, then the grand total is 2,000,000.00, each share is 40,000.00, and the shares add up to the total.
+7. Given an items subtotal of 1,000,000.00, tax 0, other charges 1,000,000.00 (amount) and tip 0, split between 3 participants, then the grand total is 2,000,000.00 and the shares are 666,666.67 / 666,666.67 / 666,666.66.
 8. Given no participants are selected, when I press Calculate, then I see "Choose who took part" and no result (no division by zero).
 9. Given no items, when I press Calculate, then I see "Add at least one item" and no result.
 10. Given an equal-split bill, then tax, other charges and tip follow the shared rules above, including the "tip on" option.
 
 ### US-14 Record an itemized group bill
 **As a** Group member, **I want** to record which items each person had, including shared dishes, **so that** everyone pays for what they had plus a fair part of tax, other charges and tip.
-- **Job:** J4 · **Status:** Not implemented
+- **Job:** J4 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given Ali has a 40.00 steak and Sara a 10.00 salad, with tax 5.00, other charges blank and tip 10.00, when I press Calculate, then Ali's share is 52.00 and Sara's is 13.00.
 2. Given the same bill with other charges 2.50 (amount), then Ali pays 2.00 and Sara 0.50 of the other charges, Ali's share is 54.00, Sara's is 13.50, and they add up to the grand total of 67.50.
 3. Given 12.00 nachos ticked for Ali, Sara and Omar, then each is charged 4.00 for the nachos.
 4. Given a 10.00 item shared by 3 people, then their parts are 3.34 / 3.33 / 3.33, with the extra cent going to the first ticked person.
-5. Given three participants with 10.00 of food each and other charges 0.10, then their other-charges parts are 0.04 / 0.03 / 0.03: the leftover cent goes to the first participant in list order when there's a tie.
-6. Given any itemized bill, then tax, other charges and tip are each split separately in proportion to each participant's food subtotal (leftover cents by largest remainder). Each of those parts adds up exactly to the bill's tax, other charges and tip.
-7. Given a participant with no items, and other charges of 5.00 on the bill, then that participant's other-charges part is 0.00, and they owe 0.00 in total (food, tax, other charges and tip).
+5. Given three participants with 10.00 of items each and other charges 0.10, then their other-charges parts are 0.04 / 0.03 / 0.03: the leftover cent goes to the first participant in list order when there's a tie.
+6. Given any itemized bill, then tax, other charges and tip are each split separately in proportion to each participant's items subtotal (leftover cents by largest remainder). Each of those parts adds up exactly to the bill's tax, other charges and tip.
+7. Given a participant with no items, and other charges of 5.00 on the bill, then that participant's other-charges part is 0.00, and they owe 0.00 in total (items, tax, other charges and tip).
 8. Given an item with nobody ticked, when I press Calculate, then I see "Choose who shared this item" next to it and no result.
 9. Given any valid itemized bill, then the per-person totals add up exactly to the grand total.
 10. Given an item row, when I open its people dropdown, then it lists only this bill's participants, each with a tick box, and I can tick one or several.
@@ -304,7 +332,7 @@ Acceptance criteria:
 
 ### US-15 Record who paid a group bill
 **As a** Group member, **I want** to record which participant paid the bill, **so that** they're credited and the others owe them.
-- **Job:** J5 · **Status:** Not implemented
+- **Job:** J5 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given a bill's participants are Ali and Sara, then the payer list offers only Ali and Sara.
@@ -315,7 +343,7 @@ Acceptance criteria:
 
 ### US-16 See balances and suggested payments
 **As a** Group member, **I want** to see each member's running balance and the fewest payments to settle up, **so that** I always know who owes whom.
-- **Job:** J6 · **Status:** Not implemented
+- **Job:** J6 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given Ali paid 65.00 for a bill with shares Ali 52.00 and Sara 13.00 (and no other activity), then Ali's net balance is +13.00, Sara's is −13.00, and the suggestion reads "Sara pays Ali 13.00".
@@ -329,7 +357,7 @@ Acceptance criteria:
 
 ### US-17 Record a settle-up
 **As a** Group member, **I want** to record that one member paid another back, **so that** balances reflect repayments.
-- **Job:** J7 · **Status:** Not implemented
+- **Job:** J7 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given Sara owes Ali 13.00, when I record "Sara paid Ali 13.00", then both balances become 0.00 and the suggestion disappears.
@@ -341,7 +369,7 @@ Acceptance criteria:
 
 ### US-18 Edit and delete group bills and settle-ups
 **As a** Group member, **I want** to correct or remove any group bill or settle-up, **so that** our balances stay right.
-- **Job:** J6 · **Status:** Not implemented
+- **Job:** J6 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given any current member, then they can edit or delete any bill or settle-up in the group, not just their own.
@@ -352,7 +380,7 @@ Acceptance criteria:
 
 ### US-19 See the group's activity log
 **As a** Group member, **I want** a log of every change in the group, **so that** I can see who did what and when.
-- **Job:** J9 · **Status:** Not implemented
+- **Job:** J9 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given any member adds, edits or deletes a bill or settle-up, then the activity log shows who did it, when, and what changed (e.g. "Sara edited 'Pizza night': 60.00 → 65.00").
@@ -367,7 +395,7 @@ Acceptance criteria:
 
 ### US-20 Remove a member from a group
 **As a** Group member, **I want** to remove a member who has settled up, **so that** the group lists only the people still in it, without changing past bills.
-- **Job:** J10 · **Status:** Not implemented
+- **Job:** J10 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given a member whose balance isn't 0.00, when anyone tries to remove them, then I see "Settle this member's balance before removing them" and nothing changes.
@@ -380,7 +408,7 @@ Acceptance criteria:
 
 ### US-21 Leave a group
 **As a** Group member, **I want** to leave a group once I've settled up, **so that** I'm no longer part of it.
-- **Job:** J10 · **Status:** Not implemented
+- **Job:** J10 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given my balance isn't 0.00 and another current member has an account, when I try to leave, then I see "Settle your balance before leaving" and I stay in the group.
@@ -391,7 +419,7 @@ Acceptance criteria:
 
 ### US-22 Close out a group as the last member with an account
 **As a** Group member, **I want** to leave a group even when I'm the last member with an account, after a clear warning, **so that** a group nobody uses is closed for good.
-- **Job:** J11 · **Status:** Not implemented
+- **Job:** J11 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given I'm the only current member with an account, when I press Leave, then I see: "You're the last member with an account. If you leave, this group and all its bills, settle-ups and history will be permanently deleted. Unsettled balances will be lost."
@@ -403,7 +431,7 @@ Acceptance criteria:
 
 ### US-23 Restore a removed member
 **As a** Group member, **I want** to bring back a member who was removed, **so that** they can take part again with one continuous history.
-- **Job:** J10 · **Status:** Not implemented
+- **Job:** J10 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given the group has removed members, then the members page lists them under "Removed members", each with a Restore button that any current member can use.
@@ -415,7 +443,7 @@ Acceptance criteria:
 
 ### US-24 Rejoin a group with the invite code
 **As a** Group member, **I want** to rejoin a group I was removed from by entering its invite code, **so that** I can come back without waiting for someone to restore me.
-- **Job:** J10 · **Status:** Not implemented
+- **Job:** J10 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given Omar has an account and was removed, when he enters the group's invite code, then he's restored automatically with his full history and access, and the log records "Omar rejoined with the invite code".
@@ -428,7 +456,7 @@ Acceptance criteria:
 
 ### US-25 Get a clear message for every invalid input
 **As a** Solo diner or Group member, **I want** a clear message next to any field I've filled in wrongly, **so that** I never get a wrong result or a crash.
-- **Job:** J14 · **Status:** Not implemented
+- **Job:** J14 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given a money field containing "abc", "-5", "1.234", "1000000.01" or a blank, when I press Calculate or Save, then a message next to that field explains the rule and no result is shown.
@@ -442,8 +470,8 @@ Acceptance criteria:
 9. Given other charges of exactly 0.01 or 1,000,000.00 (amount), or exactly 0.01% or 100%, then it's accepted.
 10. Given any bill (solo, equal or itemized) with no items, when I press Calculate, then I see "Add at least one item" and no result.
 11. Given a bill with 200 items, when I add another, then I see "A bill can have at most 200 items" and no item is added.
-12. Given 3 items of 1,000,000.00 each, when I press Calculate, then the food subtotal is 3,000,000.00 with no error (the limit is per field, not per total).
-13. Given 200 items of 1,000,000.00 each, tax 100%, other charges 100% and tip 100% on food + tax, when I press Calculate, then the result is food 200,000,000.00, tax 200,000,000.00, other charges 200,000,000.00, tip 400,000,000.00, and grand total exactly 1,000,000,000.00.
+12. Given 3 items of 1,000,000.00 each, when I press Calculate, then the items subtotal is 3,000,000.00 with no error (the limit is per field, not per total).
+13. Given 200 items of 1,000,000.00 each, tax 100%, other charges 100% and tip 100% on items + tax, when I press Calculate, then the result is an items subtotal of 200,000,000.00, tax 200,000,000.00, other charges 200,000,000.00, tip 400,000,000.00, and grand total exactly 1,000,000,000.00.
 14. Given an item name left blank, then it's shown as "Item N" by its position. An item name of exactly 40 characters is accepted, and 41 or more shows a clear message and no result.
 15. Given any input at all, then the app never shows NaN, Infinity, "undefined", or a blank or crashed screen.
 16. Given invalid data is sent straight to the server, bypassing the page, then the server rejects it and saves nothing.
@@ -452,7 +480,7 @@ Acceptance criteria:
 
 ### US-26 Carry on safely after a result or an error
 **As a** Solo diner or Group member, **I want** results and errors to update correctly as I keep working, **so that** I never act on an out-of-date figure.
-- **Job:** J14 · **Status:** Not implemented
+- **Job:** J14 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given an error is showing, when I fix the field and press Calculate, then the error disappears and the correct result appears, with no page reload needed.
@@ -466,7 +494,7 @@ Acceptance criteria:
 
 ### US-27 Keep my inputs when saving fails
 **As a** Solo diner or Group member, **I want** my entries kept if a save fails, **so that** I don't have to type everything again.
-- **Job:** J14 · **Status:** Not implemented
+- **Job:** J14 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given the server can't be reached, when I save, then I see "Couldn't save — check your connection" and all my inputs are kept.
@@ -476,7 +504,7 @@ Acceptance criteria:
 
 ### US-28 Keep my records after a restart
 **As a** Solo diner or Group member, **I want** my bills, groups and balances to still be there after the app or its database restarts, **so that** my history is never lost.
-- **Jobs:** J2, J6 · **Status:** Not implemented
+- **Jobs:** J2, J6 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given I've saved solo bills, groups, group bills and settle-ups, when the app server is stopped and started again, then all of them, and all balances and activity logs, are exactly as before.
@@ -484,7 +512,7 @@ Acceptance criteria:
 
 ### US-29 Use the app in my usual browser
 **As a** Solo diner or Group member, **I want** the app to work in the current version of my usual browser, **so that** I don't need to install anything.
-- **Job:** J16 · **Status:** Not implemented
+- **Job:** J16 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given the current version of Chrome, Edge, Firefox or Safari, when I use every feature above, then it behaves the same way and every acceptance criterion passes.
@@ -495,7 +523,7 @@ Acceptance criteria:
 
 ### US-33 See my money at a glance on the Dashboard
 **As a** Solo diner or Group member, **I want** a home screen that sums up what I owe and what I'm owed, **so that** I know where I stand the moment I log in.
-- **Job:** J20 · **Status:** Not implemented
+- **Job:** J20 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given I log in, then I land on the Dashboard.
@@ -509,7 +537,7 @@ Acceptance criteria:
 
 ### US-34 Find my way on a computer or a phone
 **As a** Solo diner or Group member, **I want** clear navigation that works on a big screen and a small one, **so that** I can use whichever device I have with me.
-- **Job:** J16 · **Status:** Not implemented
+- **Job:** J16 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given a screen 1280 px wide, then a left sidebar with Dashboard, Solo bills, Groups and Account is always visible.
@@ -520,7 +548,7 @@ Acceptance criteria:
 
 ### US-35 Choose light or dark appearance
 **As a** Solo diner or Group member, **I want** the app to be light or dark to suit my surroundings, **so that** figures are comfortable to read day or night.
-- **Job:** J21 · **Status:** Not implemented
+- **Job:** J21 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given the appearance setting is "Device" (the default) and my device is in dark mode, then the app is dark. When the device switches to light mode, the app follows.
@@ -530,7 +558,7 @@ Acceptance criteria:
 
 ### US-36 Use the app with a keyboard, screen reader or zoom
 **As a** Solo diner or Group member, **I want** every feature to work without a mouse, with a screen reader and at large text sizes, **so that** I can manage my money on my own.
-- **Job:** J22 · **Status:** Not implemented
+- **Job:** J22 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given I use only the keyboard, then I can sign up, log in, create a group, add members, add an itemized bill (including choosing people in the item dropdowns), calculate, save, record a settle-up and log out, with a clearly visible focus outline at every step.
@@ -542,7 +570,7 @@ Acceptance criteria:
 
 ### US-37 Know what happened after every action
 **As a** Solo diner or Group member, **I want** clear signs when something is saving, saved, loading or empty, **so that** I'm never unsure whether it worked and never save something twice.
-- **Job:** J14 · **Status:** Not implemented
+- **Job:** J14 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given I save a bill, record a payment or remove a member, then a short corner message appears ("Bill saved", "Payment recorded", "Member removed"), disappears after 5 seconds, and is announced by screen readers.
@@ -554,7 +582,7 @@ Acceptance criteria:
 
 ### US-38 Don't lose unsaved changes by accident
 **As a** Solo diner or Group member, **I want** a warning before I leave a bill I haven't saved, **so that** I don't lose a long receipt I've typed in.
-- **Job:** J14 · **Status:** Not implemented
+- **Job:** J14 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given I've changed a bill form without saving, when I click a sidebar link, the back button or any other link, then I'm asked "You have unsaved changes. Leave without saving?" with Stay and Leave.
@@ -569,10 +597,10 @@ Acceptance criteria:
 
 ### US-30 Run the app locally from the README
 **As a** Host, **I want** to install and start the app on my computer by following the README, **so that** I can try it for free.
-- **Job:** J17 · **Status:** Not implemented
+- **Job:** J17 · **Status:** Implemented
 
 Acceptance criteria:
-1. Given Node.js LTS and Docker are installed, when I follow the README steps on a fresh clone (copy `.env.example` to `.env`, `docker compose up -d`, `npm install`, `npm run dev`, open the shown address), then the app runs and I can sign up locally.
+1. Given Node.js LTS and Docker are installed, when I follow the README steps on a fresh clone (go into the `src` folder, copy `.env.example` to `.env`, `docker compose up -d`, `npm install`, `npm run dev`, open the shown address), then the app runs and I can sign up locally.
 2. Given the README, then it never asks for a paid account, an API key, or any third-party cloud or paid service.
 3. Given the app is running, then it works with no internet-based service: accounts, data storage and calculations all happen inside the app and its own self-hosted PostgreSQL container.
 4. Given the database container isn't running, when I start the app, then it prints "Can't reach the database. Start it with: docker compose up -d" and stops, with no crash trace.
@@ -582,7 +610,7 @@ Acceptance criteria:
 
 ### US-31 Deploy the app to my own server
 **As a** Host, **I want** to run the same app on a server, **so that** my friends can use it for real.
-- **Job:** J18 · **Status:** Not implemented
+- **Job:** J18 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given a server with Node.js LTS and a self-hosted PostgreSQL 18 database (e.g. the same Compose file), when I deploy the same build, then it runs, configured only through settings the app owns: port, `DATABASE_URL` and session secret.
@@ -592,7 +620,7 @@ Acceptance criteria:
 
 ### US-32 Run all tests with one command
 **As a** Host, **I want** to run every automated test with one command, **so that** I can see for myself that the app works as described.
-- **Job:** J19 · **Status:** Not implemented
+- **Job:** J19 · **Status:** Implemented
 
 Acceptance criteria:
 1. Given the project is installed and the database container is running, when I run `npm test`, then the calculation, validation and server tests and the browser tests (Chromium, Firefox and WebKit, Safari's engine) all run and pass.

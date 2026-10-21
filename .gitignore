@@ -1,7 +1,7 @@
 # ==========================================================
 # .gitignore for the Bill Splitting Calculator
 # Keeps out generated, local, and secret files.
-# Tracked: src/, tests/, docs/, transcripts/, README.md
+# Tracked: src/ (all code, configs and tests), docs/, transcripts/, README.md
 # ==========================================================
 
 # ---------- Installed packages / dependencies ----------
@@ -59,6 +59,7 @@ htmlcov/
 .coverage.*
 playwright-report/
 test-results/
+test-results-*/
 
 # ---------- Logs ----------
 logs/

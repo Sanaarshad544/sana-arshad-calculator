@@ -1,0 +1,27 @@
+# The app's own PostgreSQL database. Start it with: docker compose up -d
+# Data lives in the "pgdata" volume, so it survives restarts and `docker compose down`.
+# WARNING: `docker compose down -v` deletes the volume and all saved data.
+name: bill-splitter
+
+services:
+  db:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-bill_splitter}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local_dev_password}
+      POSTGRES_DB: bill_splitter
+    ports:
+      # Reachable only from this computer, never from other machines.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d bill_splitter"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  pgdata:

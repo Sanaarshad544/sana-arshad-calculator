@@ -8,7 +8,7 @@ A **Solo diner** is someone who eats out, orders in or shops on their own and pa
 
 They can:
 - create an account with a username and password, receive a one-time recovery code, log in, log out, and reset a forgotten password with that code
-- enter a bill's items, tax, other charges and tip, each of tax, other charges and tip as a % or an amount, and choose whether a % tip is on the food only or on the food + tax
+- enter a bill's items, tax, other charges and tip, each of tax, other charges and tip as a % or an amount, and choose whether a % tip is on the items only or on the items + tax
 - pick the bill's currency symbol, press Calculate and see the subtotal, tax, other charges, tip and total, exact to the cent
 - save the bill to their personal history, then reopen, edit or delete saved bills
 
