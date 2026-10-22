@@ -84,22 +84,20 @@ async function setCharge(page: Page, label: 'Tax' | 'Other charges (optional)' |
   await group.getByRole('textbox').fill(value);
 }
 
-const pickerButton = (page: Page, n: number) => page.getByRole('button', { name: new RegExp(`^Who shared item ${n}:`) });
+/** One item's "Shared by" chips (split by items): a tick box for each person on the bill, plus an "Everyone" button. */
+const sharedBy = (page: Page, n: number) => page.getByRole('group', { name: `Who shared item ${n}`, exact: true });
+/** The "Everyone" button of a set of chips ("Who took part", or one item's "Shared by"). It is a button, not a tick box. */
+const everyone = (chips: Locator) => chips.getByRole('button', { name: 'Everyone', exact: true });
+/** The chips of a set, in the order shown (each chip is a label around a tick box, so this is a list of names). */
+const chipLabels = (chips: Locator) => chips.locator('label');
 
-/** Fills item rows (adding rows as needed) and ticks who shared each one in its dropdown. */
+/** Fills item rows (adding rows as needed) and taps the chips of the people who shared each one. */
 async function fillItems(page: Page, items: { price: string; people?: string[] }[]): Promise<void> {
   for (let i = 0; i < items.length; i += 1) {
     const n = i + 1;
     if (i > 0) await page.getByRole('button', { name: '+ Add item' }).click();
     await page.getByLabel(`Item ${n} price`).fill(items[i].price);
-    const people = items[i].people;
-    if (people) {
-      await pickerButton(page, n).click();
-      const panel = page.locator('.picker-panel');
-      for (const p of people) await panel.getByRole('checkbox', { name: p, exact: true }).check();
-      await panel.getByRole('button', { name: 'Done' }).click();
-      await expect(panel).toHaveCount(0);
-    }
+    for (const person of items[i].people ?? []) await sharedBy(page, n).getByRole('checkbox', { name: person, exact: true }).check();
   }
 }
 
@@ -651,6 +649,39 @@ test('US-12 #9 after a wrong code, entering the right one works without reloadin
 
 // ---------- US-13 equal-split bills ----------
 
+test('US-13 #1 in a group of 10, a bill for 5 of them charges only those 5 and leaves the other 5 balances alone', async ({ page }, info) => {
+  const username = await signUpFast(page, info);
+  const names = Array.from({ length: 9 }, (_, i) => `M${i + 1}`);
+  const { groupId, meId, ids } = await makeGroup(page, 'Ten', '$', names);
+  await openNewBill(page, groupId);
+  const chips = tookPart(page);
+  await expect(chips.getByRole('checkbox', { checked: true })).toHaveCount(10);
+
+  // Untick M5 to M9: five people are left (me and M1 to M4), and I paid.
+  for (const name of names.slice(4)) await chips.getByRole('checkbox', { name, exact: true }).uncheck();
+  await expect(chips.getByRole('checkbox', { checked: true })).toHaveCount(5);
+  await expect(page.getByLabel('Who paid').locator('option')).toHaveText(['Choose who paid', username, 'M1', 'M2', 'M3', 'M4']);
+  await page.getByLabel('Item 1 price').fill('100.00');
+  await calculate(page);
+  await expect(shareNames(page)).toHaveText([username, 'M1', 'M2', 'M3', 'M4']);
+  await expect(shareAmounts(page)).toHaveText(Array<string>(5).fill('$20.00'));
+  await page.getByRole('button', { name: 'Save bill' }).click();
+  await expect(page.getByRole('status').getByText('Bill saved')).toBeVisible();
+
+  // Only those five are charged: M1 to M4 owe 20.00 each, I am owed 80.00, and M5 to M9 stay at 0.00.
+  await expect(page.getByTestId('balance-row')).toHaveCount(10);
+  for (const name of names.slice(0, 4)) await expect(balanceRow(page, name)).toContainText('−$20.00 owes');
+  await expect(page.getByTestId('balance-row').filter({ hasText: '(you)' })).toContainText('+$80.00 is owed');
+  for (const name of names.slice(4)) {
+    await expect(balanceRow(page, name)).toContainText('$0.00');
+    await expect(balanceRow(page, name)).not.toContainText('owes');
+    await expect(balanceRow(page, name)).not.toContainText('is owed');
+  }
+  const { bills } = await api<{ bills: { participantIds: string[] }[] }>(page, 'get', `/groups/${groupId}/bills`);
+  expect(bills).toHaveLength(1);
+  expect([...bills[0].participantIds].sort()).toEqual([meId, ids.M1, ids.M2, ids.M3, ids.M4].sort());
+});
+
 test('US-13 #3 items 90.00 + 10% other charges between 3 people: "Other charges (10%)" $9.00, total $99.00, each $33.00', async ({ page }, info) => {
   await signUpFast(page, info);
   const { groupId } = await makeGroup(page, 'Three', '$', ['Ali', 'Sara']);
@@ -699,6 +730,35 @@ test('US-13 #3 charges entered as amounts show no rate on their results lines', 
   await expect(totalsRow(page, 'Tip')).toHaveText('$15.00');
   await expect(page.locator('dl.totals .rate')).toHaveCount(0);
   await expect(page.getByTestId('grand-total')).toHaveText('$130.00');
+});
+
+test('US-26 #10 a blank or 0% charge shows no rate on its results line', async ({ page }, info) => {
+  await signUpFast(page, info);
+  const { groupId } = await makeGroup(page, 'Quiet rates', '$', ['Ali']);
+  await openNewBill(page, groupId);
+  await page.getByLabel('Item 1 price').fill('100.00');
+
+  // Blank tax, other charges and tip (as % or amount): three plain lines.
+  await calculate(page);
+  await expect(page.getByTestId('grand-total')).toHaveText('$100.00');
+  for (const label of ['Tax', 'Other charges', 'Tip']) await expect(totalsRow(page, label)).toHaveText('$0.00');
+  await expect(page.locator('dl.totals .rate')).toHaveCount(0);
+
+  // Typing 0 as a percentage everywhere, with the tip on items + tax, still shows no rate.
+  await setCharge(page, 'Tax', 'Percentage', '0');
+  await setCharge(page, 'Other charges (optional)', 'Percentage', '0');
+  await setCharge(page, 'Tip', 'Percentage', '0');
+  await page.getByRole('radio', { name: 'Items + tax' }).check();
+  await expect(page.getByText('Press Calculate to see results')).toBeVisible();
+  await calculate(page);
+  await expect(page.getByTestId('grand-total')).toHaveText('$100.00');
+  for (const label of ['Tax', 'Other charges', 'Tip']) await expect(totalsRow(page, label)).toHaveText('$0.00');
+  await expect(page.locator('dl.totals .rate')).toHaveCount(0);
+
+  // A real rate does come back as soon as there is one.
+  await setCharge(page, 'Tax', 'Percentage', '5');
+  await calculate(page);
+  await expect(totalsRow(page, 'Tax (5%)')).toHaveText('$5.00');
 });
 
 test('US-13 the tax, other-charges and tip boxes start empty and blank counts as 0; typing 5 shows "5", not "05"', async ({ page }, info) => {
@@ -803,6 +863,64 @@ test('US-13 #8 with nobody ticked, Calculate shows "Choose who took part" and no
   await expect(page.getByText('Press Calculate to see results')).toBeVisible();
   await expect(page.getByTestId('grand-total')).toHaveCount(0);
   await expect(page.getByTestId('share')).toHaveCount(0);
+});
+
+test('US-13 #11 a new group bill starts with every current member ticked as a name chip and me as the payer; "Everyone" unticks and ticks them all', async ({ page }, info) => {
+  const username = await signUpFast(page, info);
+  const { groupId } = await makeGroup(page, 'Chips', '$', ['Ali', 'Sara']);
+  await openNewBill(page, groupId);
+
+  // Everybody is ticked, as name chips in member order, and "Everyone" is a button on top of them (not one more tick box).
+  const chips = tookPart(page);
+  await expect(chipLabels(chips)).toHaveText([username, 'Ali', 'Sara']);
+  await expect(chips.getByRole('checkbox')).toHaveCount(3);
+  await expect(chips.getByRole('checkbox', { checked: true })).toHaveCount(3);
+  await expect(chips.getByRole('checkbox', { name: 'Everyone' })).toHaveCount(0);
+  await expect(everyone(chips)).toHaveAttribute('aria-pressed', 'true');
+  // I start as the payer.
+  await expect(page.getByLabel('Who paid').locator('option:checked')).toHaveText(username);
+
+  // "Everyone" unticks them all ...
+  await everyone(chips).click();
+  await expect(chips.getByRole('checkbox', { checked: true })).toHaveCount(0);
+  await expect(everyone(chips)).toHaveAttribute('aria-pressed', 'false');
+  // ... and ticks them all again.
+  await everyone(chips).click();
+  await expect(chips.getByRole('checkbox', { checked: true })).toHaveCount(3);
+  await expect(everyone(chips)).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('US-13 #12 "How to split" is a two-way switch, "Equally" or "By items", with a line under it saying what the chosen way means', async ({ page }, info) => {
+  await signUpFast(page, info);
+  const { groupId } = await makeGroup(page, 'Two ways', '$', ['Ali']);
+  await openNewBill(page, groupId);
+
+  const how = page.getByRole('group', { name: 'How to split' });
+  await expect(how.getByRole('radio')).toHaveCount(2);
+  const equally = how.getByRole('radio', { name: 'Equally', exact: true });
+  const byItems = how.getByRole('radio', { name: 'By items (each pays for what they had)', exact: true });
+  // What is shown on the two choices is short; the longer words are for screen readers.
+  await expect(how.getByText('Equally', { exact: true })).toBeVisible();
+  await expect(how.getByText('By items', { exact: true })).toBeVisible();
+
+  const equalHint = how.getByText('Everyone who took part pays the same share.');
+  const itemizedHint = how.getByText('Each person pays for the items they had, plus their part of tax, other charges and tip.');
+  await expect(equally).toBeChecked();
+  await expect(equalHint).toBeVisible();
+  await expect(itemizedHint).toHaveCount(0);
+  // The line sits under the switch.
+  expect((await pageEdges(equalHint)).top).toBeGreaterThanOrEqual((await pageEdges(how.getByText('By items', { exact: true }))).bottom);
+
+  await byItems.check();
+  await expect(byItems).toBeChecked();
+  await expect(equally).not.toBeChecked();
+  await expect(itemizedHint).toBeVisible();
+  await expect(equalHint).toHaveCount(0);
+
+  await equally.check();
+  await expect(equally).toBeChecked();
+  await expect(equalHint).toBeVisible();
+  await expect(itemizedHint).toHaveCount(0);
 });
 
 // ---------- US-14 itemized bills ----------
@@ -936,58 +1054,148 @@ test('US-14 #7 a person with no items owes $0.00 in every part even when the bil
   await expect(shareAmounts(page)).toHaveText(['$14.50', '$14.50', '$0.00']);
 });
 
-test('US-14 #8 an item with nobody ticked shows the error "Choose who shared this item" next to it after Calculate, and no result', async ({ page }, info) => {
+test('US-14 #8 an item with nobody ticked shows the error "Choose who shared this item" under its chips after Calculate, and no result', async ({ page }, info) => {
   await signUpFast(page, info);
   const { groupId } = await makeGroup(page, 'Nobody shared', '$', ['Ali']);
   await openNewBill(page, groupId);
   await chooseItemized(page);
   await page.getByLabel('Item 1 price').fill('10.00');
 
-  // Before Calculate the dropdown button shows the same words as a placeholder, but there is no error text yet.
-  await expect(pickerButton(page, 1)).toContainText('Choose who shared this item');
+  // Nobody is ticked yet, but there is no error text until Calculate.
+  await expect(sharedBy(page, 1).getByRole('checkbox', { checked: true })).toHaveCount(0);
   await expect(fieldError(page, 'Choose who shared this item')).toHaveCount(0);
 
   await calculate(page);
+  const chips = sharedBy(page, 1);
   const row = page.locator('ol.items > li').first();
   await expect(row.locator('p.field-error')).toHaveText('Choose who shared this item');
   await expect(fieldError(page, 'Choose who shared this item')).toHaveCount(1);
+  // It shows right under the chips it is about, and every tick box of the item is tied to it.
+  const message = chips.locator('p.field-error');
+  await expect(message).toHaveText('Choose who shared this item');
+  expect((await pageEdges(message)).top).toBeGreaterThanOrEqual((await pageEdges(chips.getByRole('checkbox').last())).bottom);
+  for (const box of await chips.getByRole('checkbox').all()) {
+    await expect(box).toHaveAttribute('aria-invalid', 'true');
+    await expect(box).toHaveAccessibleDescription('Choose who shared this item');
+  }
   await expect(page.getByText('Press Calculate to see results')).toBeVisible();
   await expect(page.getByTestId('grand-total')).toHaveCount(0);
 });
 
-test("US-14 #10 an item's dropdown lists exactly this bill's ticked people (including me) with tick boxes, and I can tick one or several", async ({ page }, info) => {
-  const username = await signUpFast(page, info);
-  const { groupId } = await makeGroup(page, 'Dropdown', '$', ['Ali', 'Sara', 'Omar']);
+test('US-14 #8 with an empty first line, "Choose who shared this item" still shows next to the item that has nobody ticked', async ({ page }, info) => {
+  await signUpFast(page, info);
+  const { groupId } = await makeGroup(page, 'Spare line', '$', ['Ali']);
   await openNewBill(page, groupId);
-  await tookPart(page).getByRole('checkbox', { name: 'Omar', exact: true }).uncheck();
   await chooseItemized(page);
-  await pickerButton(page, 1).click();
-  const panel = page.locator('.picker-panel');
-  await expect(panel).toBeVisible();
-  await expect(panel.getByRole('checkbox')).toHaveCount(3);
-  expect(await panel.locator('label').allTextContents()).toEqual([username, 'Ali', 'Sara']);
-  await expect(panel.getByRole('checkbox', { name: 'Omar' })).toHaveCount(0);
-  await expect(panel.getByRole('checkbox', { checked: true })).toHaveCount(0);
+  // Item 1 stays completely empty (a spare line, left out); item 2 has a price and nobody ticked.
+  await page.getByRole('button', { name: '+ Add item' }).click();
+  await page.getByLabel('Item 2 price').fill('10.00');
 
-  await panel.getByRole('checkbox', { name: 'Ali', exact: true }).check();
-  await expect(panel.getByRole('checkbox', { checked: true })).toHaveCount(1);
-  await panel.getByRole('checkbox', { name: 'Sara', exact: true }).check();
-  await expect(panel.getByRole('checkbox', { checked: true })).toHaveCount(2);
+  await calculate(page);
+  await expect(fieldError(page, 'Choose who shared this item')).toHaveCount(1);
+  await expect(sharedBy(page, 2).locator('p.field-error')).toHaveText('Choose who shared this item');
+  await expect(sharedBy(page, 1).locator('p.field-error')).toHaveCount(0);
+  await expect(sharedBy(page, 2).getByRole('checkbox').first()).toBeFocused();
+  await expect(page.getByTestId('grand-total')).toHaveCount(0);
+
+  // Ticking someone on item 2 is enough: the spare line needs nobody, and it is not part of the bill.
+  await sharedBy(page, 2).getByRole('checkbox', { name: 'Ali', exact: true }).check();
+  await calculate(page);
+  await expect(page.getByTestId('grand-total')).toHaveText('$10.00');
+  await expect(shareAmounts(page)).toHaveText(['$0.00', '$10.00']);
 });
 
-test('US-14 #11 ticking Ali, Sara and Omar shows "Ali, Sara, Omar" on the closed dropdown button', async ({ page }, info) => {
+test("US-14 #10 each item shows \"Shared by\" with a name chip for each of this bill's people (including me), plus \"Everyone\"; I tick one or several by tapping, with no dropdown", async ({ page }, info) => {
   const username = await signUpFast(page, info);
-  const { groupId } = await makeGroup(page, 'Names shown', '$', ['Ali', 'Sara', 'Omar']);
+  const { groupId } = await makeGroup(page, 'Chips', '$', ['Ali', 'Sara', 'Omar']);
+  await openNewBill(page, groupId);
+  await tookPart(page).getByRole('checkbox', { name: 'Omar', exact: true }).uncheck();
+
+  // Split equally has no per-item chips; "By items" adds them.
+  await expect(page.getByRole('group', { name: /^Who shared item/ })).toHaveCount(0);
+  await chooseItemized(page);
+  const chips = sharedBy(page, 1);
+  await expect(chips).toBeVisible();
+  await expect(chips.getByText('Shared by', { exact: true })).toBeVisible();
+  // Exactly this bill's ticked people, in member order; Omar is not on the bill. "Everyone" is a button beside them.
+  await expect(chipLabels(chips)).toHaveText([username, 'Ali', 'Sara']);
+  await expect(chips.getByRole('checkbox')).toHaveCount(3);
+  await expect(chips.getByRole('checkbox', { name: 'Omar' })).toHaveCount(0);
+  await expect(everyone(chips)).toBeVisible();
+  await expect(chips.getByRole('checkbox', { checked: true })).toHaveCount(0);
+
+  // No dropdown to open: the old button, panel and "Done" are gone, and one tap ticks a person.
+  await expect(page.getByRole('button', { name: /^Who shared item/ })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Done' })).toHaveCount(0);
+  await chips.getByRole('checkbox', { name: 'Ali', exact: true }).check();
+  await expect(chips.getByRole('checkbox', { checked: true })).toHaveCount(1);
+  await chips.getByRole('checkbox', { name: 'Sara', exact: true }).check();
+  await expect(chips.getByRole('checkbox', { checked: true })).toHaveCount(2);
+  await expect(chips.getByRole('checkbox', { name: username, exact: true })).not.toBeChecked();
+  // Tapping a ticked chip unticks it.
+  await chips.getByRole('checkbox', { name: 'Ali', exact: true }).uncheck();
+  await expect(chips.getByRole('checkbox', { checked: true })).toHaveCount(1);
+  await expect(chips.getByRole('checkbox', { name: 'Sara', exact: true })).toBeChecked();
+});
+
+test('US-14 #11 tapping "Everyone" on an item ticks all of the bill\'s people for it, and tapping it again unticks them all', async ({ page }, info) => {
+  const username = await signUpFast(page, info);
+  const { groupId } = await makeGroup(page, 'Everyone', '$', ['Ali', 'Sara', 'Omar']);
   await openNewBill(page, groupId);
   await chooseItemized(page);
-  await pickerButton(page, 1).click();
-  const panel = page.locator('.picker-panel');
-  for (const name of ['Ali', 'Sara', 'Omar']) await panel.getByRole('checkbox', { name, exact: true }).check();
-  await panel.getByRole('button', { name: 'Done' }).click();
-  await expect(panel).toHaveCount(0);
-  await expect(pickerButton(page, 1)).toContainText('Ali, Sara, Omar');
-  await expect(pickerButton(page, 1)).not.toContainText(username);
-  await expect(pickerButton(page, 1)).not.toContainText('Choose who shared this item');
+  await fillItems(page, [{ price: '12.00' }, { price: '8.00' }]);
+
+  const first = sharedBy(page, 1);
+  const second = sharedBy(page, 2);
+  await expect(everyone(first)).toHaveAttribute('aria-pressed', 'false');
+  await everyone(first).click();
+  await expect(first.getByRole('checkbox', { checked: true })).toHaveCount(4);
+  await expect(everyone(first)).toHaveAttribute('aria-pressed', 'true');
+  // It is per item: the other item is untouched.
+  await expect(second.getByRole('checkbox', { checked: true })).toHaveCount(0);
+  await expect(everyone(second)).toHaveAttribute('aria-pressed', 'false');
+
+  // The ticks are real: 12.00 for four people is 3.00 each (item 2 is Ali's alone).
+  await sharedBy(page, 2).getByRole('checkbox', { name: 'Ali', exact: true }).check();
+  await calculate(page);
+  await expect(shareNames(page)).toHaveText([username, 'Ali', 'Sara', 'Omar']);
+  await expect(shareAmounts(page)).toHaveText(['$3.00', '$11.00', '$3.00', '$3.00']);
+
+  // Tapping it again unticks them all.
+  await everyone(first).click();
+  await expect(first.getByRole('checkbox', { checked: true })).toHaveCount(0);
+  await expect(everyone(first)).toHaveAttribute('aria-pressed', 'false');
+  await expect(sharedBy(page, 2).getByRole('checkbox', { name: 'Ali', exact: true })).toBeChecked();
+});
+
+test('US-14 #12 unticking a person from the bill takes them out of every item\'s chips, and an item left with nobody shows "Choose who shared this item" on Calculate', async ({ page }, info) => {
+  const username = await signUpFast(page, info);
+  const { groupId } = await makeGroup(page, 'Unticked', '$', ['Ali', 'Sara']);
+  await openNewBill(page, groupId);
+  await chooseItemized(page);
+  await fillItems(page, [
+    { price: '10.00', people: ['Ali', 'Sara'] },
+    { price: '6.00', people: ['Sara'] },
+  ]);
+  for (const n of [1, 2]) await expect(chipLabels(sharedBy(page, n))).toHaveText([username, 'Ali', 'Sara']);
+
+  await tookPart(page).getByRole('checkbox', { name: 'Sara', exact: true }).uncheck();
+
+  // Sara is gone from both items' chips.
+  for (const n of [1, 2]) {
+    await expect(chipLabels(sharedBy(page, n))).toHaveText([username, 'Ali']);
+    await expect(sharedBy(page, n).getByRole('checkbox', { name: 'Sara' })).toHaveCount(0);
+  }
+  // Item 1 still has Ali; item 2 was only Sara's, so nobody is left on it.
+  await expect(sharedBy(page, 1).getByRole('checkbox', { name: 'Ali', exact: true })).toBeChecked();
+  await expect(sharedBy(page, 2).getByRole('checkbox', { checked: true })).toHaveCount(0);
+
+  await calculate(page);
+  await expect(fieldError(page, 'Choose who shared this item')).toHaveCount(1);
+  await expect(sharedBy(page, 2).locator('p.field-error')).toHaveText('Choose who shared this item');
+  await expect(sharedBy(page, 1).locator('p.field-error')).toHaveCount(0);
+  await expect(page.getByText('Press Calculate to see results')).toBeVisible();
+  await expect(page.getByTestId('grand-total')).toHaveCount(0);
 });
 
 // ---------- US-15 who paid ----------
@@ -1216,7 +1424,219 @@ test('US-17 #5 a removed member is not offered as either person in a new settle-
 
 // ---------- US-18 editing and deleting ----------
 
-test('US-18 #3 a saved bill with 10% other charges reopens as 10 with "Percentage" checked; changing it to 20% updates the balances', async ({ page }, info) => {
+test('US-18 #2 after saving a new bill, and after saving an edited one, I am on the group\'s bill list with that bill marked "Saved"', async ({ page }, info) => {
+  await signUpFast(page, info);
+  const { groupId, meId, ids } = await makeGroup(page, 'Saved marks', '$', ['Ali']);
+  await postBill(page, groupId, billBody([meId, ids.Ali], meId, ['30.00'], { name: 'Older bill' }));
+  const pizza = page.getByRole('link', { name: /^Pizza/ });
+  const older = page.getByRole('link', { name: /^Older bill/ });
+  const saved = (row: Locator) => row.getByText('Saved', { exact: true });
+
+  // A new bill: Save goes to the group's bills, and only the new bill is marked.
+  await openNewBill(page, groupId);
+  await page.getByLabel('Bill name').fill('Pizza');
+  await page.getByLabel('Item 1 price').fill('20.00');
+  await page.getByRole('button', { name: 'Save bill' }).click();
+  await expect(page.getByRole('status').getByText('Bill saved')).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: 'Saved marks', exact: true })).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`/groups/${groupId}$`));
+  await expect(page.getByRole('tab', { name: 'Bills' })).toHaveAttribute('aria-selected', 'true');
+  await expect(older).toBeVisible();
+  await expect(saved(pizza)).toBeVisible();
+  await expect(saved(older)).toHaveCount(0);
+  await expect(page.getByText('Saved', { exact: true })).toHaveCount(1);
+
+  // An edited bill: Save goes to the bills again, and now the edited one is the marked one.
+  await older.click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Older bill' })).toBeVisible();
+  await page.getByRole('link', { name: 'Edit bill' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Edit Older bill' })).toBeVisible();
+  await page.getByLabel('Item 1 price').fill('36.00');
+  await page.getByRole('button', { name: 'Save bill' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Saved marks', exact: true })).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`/groups/${groupId}$`));
+  await expect(saved(older)).toBeVisible();
+  await expect(older).toContainText('$36.00');
+  await expect(saved(pizza)).toHaveCount(0);
+  await expect(page.getByText('Saved', { exact: true })).toHaveCount(1);
+});
+
+test('US-18 #2 an edited bill is checked with the same rules as a new one: a wrong price shows its message, and nothing is saved until it is fixed', async ({ page }, info) => {
+  await signUpFast(page, info);
+  const { groupId, meId, ids } = await makeGroup(page, 'Same rules', '$', ['Ali']);
+  const billId = await postBill(page, groupId, billBody([meId, ids.Ali], meId, ['40.00'], { name: 'Dinner' }));
+  const totals = async () => (await api<{ bills: { totalCents: number }[] }>(page, 'get', `/groups/${groupId}/bills`)).bills.map((b) => b.totalCents);
+
+  await page.goto(`/groups/${groupId}/bills/${billId}/edit`);
+  await expect(page.getByRole('heading', { level: 1, name: 'Edit Dinner' })).toBeVisible();
+  await page.getByLabel('Item 1 price').fill('1.234');
+  await page.getByRole('button', { name: 'Save bill' }).click();
+  await expect(fieldError(page, 'Price must be between 0.01 and 1,000,000.00, with at most 2 decimal places')).toBeVisible();
+  await expect(page.getByLabel('Item 1 price')).toBeFocused();
+  await expect(page).toHaveURL(new RegExp(`/groups/${groupId}/bills/${billId}/edit$`));
+  expect(await totals()).toEqual([4000]);
+
+  await page.getByLabel('Item 1 price').fill('44.00');
+  await page.getByRole('button', { name: 'Save bill' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Same rules', exact: true })).toBeVisible();
+  await expect(balanceRow(page, 'Ali')).toContainText('−$22.00 owes');
+  expect(await totals()).toEqual([4400]);
+});
+
+test('US-18 #3 a saved bill opens read-only as a receipt: its items and who shared each, subtotal, tax, other charges, tip, total, who paid and each share, with "Edit bill" and "Delete"', async ({ page }, info) => {
+  await signUpFast(page, info);
+  const { groupId, ids } = await makeGroup(page, 'Receipts', '$', ['Ali', 'Sara']);
+  // The docs example: Ali's 40.00 steak and Sara's 10.00 salad, tax 5.00, other charges 2.50, tip 10.00. Ali paid.
+  const billId = await postBill(
+    page,
+    groupId,
+    billBody([ids.Ali, ids.Sara], ids.Ali, [], {
+      name: 'Dinner',
+      splitMode: 'itemized',
+      items: [
+        { name: 'Steak', price: '40.00', sharerIds: [ids.Ali] },
+        { name: 'Salad', price: '10.00', sharerIds: [ids.Sara] },
+      ],
+      tax: amountCharge('5.00'),
+      otherCharges: amountCharge('2.50'),
+      tip: amountCharge('10.00'),
+    }),
+  );
+  await openGroup(page, groupId, 'Receipts');
+  await page.getByRole('link', { name: /Dinner/ }).click();
+
+  await expect(page).toHaveURL(new RegExp(`/groups/${groupId}/bills/${billId}$`));
+  await expect(page.getByRole('heading', { level: 1, name: 'Dinner' })).toBeVisible();
+  await expect(page.getByText(/^Ali paid on .+\. Split by items\.$/)).toBeVisible();
+
+  // The receipt: the items (and who shared each), the totals, who paid, and each person's share.
+  const receipt = page.getByRole('region', { name: 'Bill', exact: true });
+  const items = receipt.getByRole('list', { name: 'Items' }).getByRole('listitem');
+  await expect(items).toHaveCount(2);
+  await expect(items.nth(0)).toContainText('Steak');
+  await expect(items.nth(0)).toContainText('$40.00');
+  await expect(items.nth(0)).toContainText('Shared by Ali');
+  await expect(items.nth(1)).toContainText('Salad');
+  await expect(items.nth(1)).toContainText('$10.00');
+  await expect(items.nth(1)).toContainText('Shared by Sara');
+  await expect(totalsRow(page, 'Subtotal')).toHaveText('$50.00');
+  await expect(totalsRow(page, 'Tax')).toHaveText('$5.00');
+  await expect(totalsRow(page, 'Other charges')).toHaveText('$2.50');
+  await expect(totalsRow(page, 'Tip')).toHaveText('$10.00');
+  await expect(page.getByTestId('grand-total')).toHaveText('$67.50');
+  await expect(receipt).toContainText('Ali paid $67.50.');
+  await expect(receipt.getByRole('heading', { level: 3, name: "Each person's share" })).toBeVisible();
+  await expect(shareNames(page)).toHaveText(['Ali', 'Sara']);
+  await expect(shareAmounts(page)).toHaveText(['$54.00', '$13.50']);
+
+  // "Edit bill" and "Delete" are what you can do; there is nothing to type in or tick, and nothing to calculate or save.
+  await expect(page.getByRole('link', { name: 'Edit bill' })).toHaveAttribute('href', `/groups/${groupId}/bills/${billId}/edit`);
+  await expect(page.getByRole('button', { name: 'Delete', exact: true })).toBeVisible();
+  for (const role of ['textbox', 'combobox', 'checkbox', 'radio'] as const) {
+    await expect(page.getByRole('main').getByRole(role), `${role} fields on a saved bill`).toHaveCount(0);
+  }
+  await expect(page.getByRole('button', { name: /^(Calculate|Save bill)$/ })).toHaveCount(0);
+});
+
+test('US-18 #3 an equal-split bill opens read-only with its items and each share, and no "Shared by" lines', async ({ page }, info) => {
+  const username = await signUpFast(page, info);
+  const { groupId, meId, ids } = await makeGroup(page, 'Equal receipt', '$', ['Ali', 'Sara']);
+  const billId = await postBill(
+    page,
+    groupId,
+    billBody([meId, ids.Ali, ids.Sara], meId, [], {
+      name: 'Pizza night',
+      items: [
+        { name: 'Large pizza', price: '24.00' },
+        { name: '', price: '6.00' },
+      ],
+    }),
+  );
+  await page.goto(`/groups/${groupId}/bills/${billId}`);
+  await expect(page.getByRole('heading', { level: 1, name: 'Pizza night' })).toBeVisible();
+  await expect(page.getByText(new RegExp(`^${escapeRegExp(username)} paid on .+\\. Split equally between 3 people\\.$`))).toBeVisible();
+
+  const receipt = page.getByRole('region', { name: 'Bill', exact: true });
+  const items = receipt.getByRole('list', { name: 'Items' }).getByRole('listitem');
+  await expect(items).toHaveCount(2);
+  await expect(items.nth(0)).toContainText('Large pizza');
+  await expect(items.nth(0)).toContainText('$24.00');
+  // An item with no name is shown as "Item N" by its place.
+  await expect(items.nth(1)).toContainText('Item 2');
+  await expect(items.nth(1)).toContainText('$6.00');
+  await expect(receipt.getByText(/^Shared by/)).toHaveCount(0);
+  await expect(page.getByTestId('grand-total')).toHaveText('$30.00');
+  await expect(shareNames(page)).toHaveText([username, 'Ali', 'Sara']);
+  await expect(shareAmounts(page)).toHaveText(['$10.00', '$10.00', '$10.00']);
+  await expect(page.getByRole('link', { name: 'Edit bill' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Delete', exact: true })).toBeVisible();
+});
+
+test('US-18 #3 "Edit bill" shows every input exactly as saved, including other charges and its % / amount setting', async ({ page }, info) => {
+  const username = await signUpFast(page, info);
+  const { groupId, ids } = await makeGroup(page, 'Exactly', '$', ['Ali', 'Sara']);
+  // Itemized, Sara paid, and each charge saved a different way.
+  const billId = await postBill(
+    page,
+    groupId,
+    billBody([ids.Ali, ids.Sara], ids.Sara, [], {
+      name: 'Team lunch',
+      splitMode: 'itemized',
+      items: [
+        { name: 'Burger', price: '12.50', sharerIds: [ids.Ali, ids.Sara] },
+        { name: 'Soda', price: '3.00', sharerIds: [ids.Sara] },
+      ],
+      tax: amountCharge('5.00'),
+      otherCharges: { mode: 'percent', value: '10' },
+      tip: { mode: 'percent', value: '15' },
+      tipOn: 'items_tax',
+    }),
+  );
+  await page.goto(`/groups/${groupId}/bills/${billId}`);
+  await expect(page.getByRole('heading', { level: 1, name: 'Team lunch' })).toBeVisible();
+  await page.getByRole('link', { name: 'Edit bill' }).click();
+
+  await expect(page).toHaveURL(new RegExp(`/groups/${groupId}/bills/${billId}/edit$`));
+  await expect(page.getByRole('heading', { level: 1, name: 'Edit Team lunch' })).toBeVisible();
+  await expect(page.getByLabel('Bill name')).toHaveValue('Team lunch');
+  // People: Ali and Sara took part (not me), Sara paid, split by items.
+  await expect(tookPart(page).getByRole('checkbox', { checked: true })).toHaveCount(2);
+  await expect(tookPart(page).getByRole('checkbox', { name: 'Ali', exact: true })).toBeChecked();
+  await expect(tookPart(page).getByRole('checkbox', { name: 'Sara', exact: true })).toBeChecked();
+  await expect(tookPart(page).getByRole('checkbox', { name: username, exact: true })).not.toBeChecked();
+  await expect(page.getByLabel('Who paid').locator('option:checked')).toHaveText('Sara');
+  await expect(page.getByRole('radio', { name: 'By items (each pays for what they had)' })).toBeChecked();
+  await expect(page.getByRole('radio', { name: 'Equally' })).not.toBeChecked();
+  // Items, with who shared each.
+  await expect(page.getByLabel('Item 1 name')).toHaveValue('Burger');
+  await expect(page.getByLabel('Item 1 price')).toHaveValue('12.50');
+  await expect(sharedBy(page, 1).getByRole('checkbox', { checked: true })).toHaveCount(2);
+  await expect(sharedBy(page, 1).getByRole('checkbox', { name: 'Ali', exact: true })).toBeChecked();
+  await expect(sharedBy(page, 1).getByRole('checkbox', { name: 'Sara', exact: true })).toBeChecked();
+  await expect(page.getByLabel('Item 2 name')).toHaveValue('Soda');
+  await expect(page.getByLabel('Item 2 price')).toHaveValue('3.00');
+  await expect(sharedBy(page, 2).getByRole('checkbox', { checked: true })).toHaveCount(1);
+  await expect(sharedBy(page, 2).getByRole('checkbox', { name: 'Sara', exact: true })).toBeChecked();
+  // Each charge: its number and whether it is a % or an amount.
+  const group = (label: 'Tax' | 'Other charges (optional)' | 'Tip') => page.getByRole('group', { name: label, exact: true });
+  await expect(group('Tax').getByRole('textbox')).toHaveValue('5.00');
+  await expect(group('Tax').getByRole('radio', { name: 'Amount' })).toBeChecked();
+  await expect(group('Tax').getByRole('radio', { name: 'Percentage' })).not.toBeChecked();
+  await expect(group('Other charges (optional)').getByRole('textbox')).toHaveValue('10');
+  await expect(group('Other charges (optional)').getByRole('radio', { name: 'Percentage' })).toBeChecked();
+  await expect(group('Other charges (optional)').getByRole('radio', { name: 'Amount' })).not.toBeChecked();
+  await expect(group('Tip').getByRole('textbox')).toHaveValue('15');
+  await expect(group('Tip').getByRole('radio', { name: 'Percentage' })).toBeChecked();
+  await expect(page.getByRole('radio', { name: 'Items + tax' })).toBeChecked();
+
+  // Cancel goes back to the bill. Deleting is done from the bill, not from this form.
+  await expect(page.getByRole('button', { name: 'Delete' })).toHaveCount(0);
+  await page.getByRole('link', { name: 'Cancel' }).click();
+  await expect(page).toHaveURL(new RegExp(`/groups/${groupId}/bills/${billId}$`));
+  await expect(page.getByRole('heading', { level: 1, name: 'Team lunch' })).toBeVisible();
+});
+
+test('US-18 #3 changing a saved bill\'s other charges from 10% to 20% in "Edit bill" recalculates the bill and the balances', async ({ page }, info) => {
   await signUpFast(page, info);
   const { groupId, meId, ids } = await makeGroup(page, 'Edits', '$', ['Ali']);
   await postBill(
@@ -1229,21 +1649,36 @@ test('US-18 #3 a saved bill with 10% other charges reopens as 10 with "Percentag
 
   await page.getByRole('link', { name: /Lunch/ }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'Lunch' })).toBeVisible();
+  await expect(totalsRow(page, 'Other charges (10%)')).toHaveText('$10.00');
+  await expect(page.getByTestId('grand-total')).toHaveText('$110.00');
+  await page.getByRole('link', { name: 'Edit bill' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Edit Lunch' })).toBeVisible();
   const other = page.getByRole('group', { name: 'Other charges (optional)', exact: true });
   await expect(other.getByRole('textbox')).toHaveValue('10');
   await expect(other.getByRole('radio', { name: 'Percentage' })).toBeChecked();
   await expect(other.getByRole('radio', { name: 'Amount' })).not.toBeChecked();
 
+  // The new number gives a new result.
   await other.getByRole('textbox').fill('20');
+  await expect(page.getByText('Press Calculate to see results')).toBeVisible();
+  await calculate(page);
+  await expect(totalsRow(page, 'Other charges (20%)')).toHaveText('$20.00');
+  await expect(page.getByTestId('grand-total')).toHaveText('$120.00');
+  await expect(shareAmounts(page)).toHaveText(['$60.00', '$60.00']);
+
   await page.getByRole('button', { name: 'Save bill' }).click();
   await expect(page.getByRole('status').getByText('Bill saved')).toBeVisible();
   await expect(page.getByRole('heading', { level: 1, name: 'Edits', exact: true })).toBeVisible();
   await expect(balanceRow(page, 'Ali')).toContainText('−$60.00 owes');
 
-  // Reopened again it shows the new saved value.
+  // Opened again, the bill shows the new figures, and its edit form the new saved value.
   await page.getByRole('link', { name: /Lunch/ }).click();
-  await expect(page.getByRole('group', { name: 'Other charges (optional)', exact: true }).getByRole('textbox')).toHaveValue('20');
-  await expect(page.getByRole('group', { name: 'Other charges (optional)', exact: true }).getByRole('radio', { name: 'Percentage' })).toBeChecked();
+  await expect(totalsRow(page, 'Other charges (20%)')).toHaveText('$20.00');
+  await expect(page.getByTestId('grand-total')).toHaveText('$120.00');
+  await page.getByRole('link', { name: 'Edit bill' }).click();
+  const again = page.getByRole('group', { name: 'Other charges (optional)', exact: true });
+  await expect(again.getByRole('textbox')).toHaveValue('20');
+  await expect(again.getByRole('radio', { name: 'Percentage' })).toBeChecked();
 });
 
 test('US-18 #4 Delete on a group bill asks first; Cancel keeps it; "Delete bill" removes it and updates the balances', async ({ page }, info) => {
@@ -1330,4 +1765,133 @@ test('US-19 #5 a member who joined with their personal invite can open the Activ
   } finally {
     await close();
   }
+});
+
+// ---------- US-37 and US-38 on the group bill form ----------
+
+test('US-37 #2 on a group bill, "Save bill" reads "Saving…" and is disabled while it saves, and a second press saves nothing more', async ({ page }, info) => {
+  await signUpFast(page, info);
+  const { groupId } = await makeGroup(page, 'Slow save', '$', ['Ali']);
+  let posts = 0;
+  await page.route('**/api/groups/*/bills', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue();
+    posts += 1;
+    await new Promise((resolve) => setTimeout(resolve, 2000)); // long enough for a slow machine to see "Saving…"
+    return route.continue();
+  });
+  await openNewBill(page, groupId);
+  await page.getByLabel('Bill name').fill('Held bill');
+  await page.getByLabel('Item 1 price').fill('12');
+  await page.getByRole('button', { name: 'Save bill' }).click();
+
+  const saving = page.getByRole('button', { name: 'Saving…' });
+  await expect(saving).toBeVisible();
+  await expect(saving).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Save bill' })).toHaveCount(0);
+  await expect(page).toHaveURL(new RegExp(`/groups/${groupId}/bills/new$`)); // nothing has moved on while it saves
+  // A second press while it saves does nothing (force: skip Playwright's own "is it enabled" wait).
+  await saving.click({ force: true });
+  expect(posts).toBe(1);
+
+  // Once it has saved, the app is on the group's bills and no "Saving…" button is left.
+  await expect(page.getByRole('heading', { level: 1, name: 'Slow save', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Saving…' })).toHaveCount(0);
+  await expect(page.getByRole('link', { name: /Held bill/ })).toHaveCount(1);
+  expect(posts).toBe(1);
+  const { bills } = await api<{ bills: { name: string }[] }>(page, 'get', `/groups/${groupId}/bills`);
+  expect(bills.map((b) => b.name)).toEqual(['Held bill']);
+});
+
+test('US-37 #3 on a group bill, double-clicking "Save bill" creates only one bill', async ({ page }, info) => {
+  await signUpFast(page, info);
+  const { groupId } = await makeGroup(page, 'Twice', '$', ['Ali']);
+  // Hold the save for a moment, so both clicks of the double-click arrive while it is still running.
+  let posts = 0;
+  await page.route('**/api/groups/*/bills', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue();
+    posts += 1;
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    return route.continue();
+  });
+  await openNewBill(page, groupId);
+  await page.getByLabel('Bill name').fill('Once only');
+  await page.getByLabel('Item 1 price').fill('9.00');
+  await page.getByRole('button', { name: 'Save bill' }).dblclick();
+  await expect(page.getByRole('heading', { level: 1, name: 'Twice', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: /Once only/ })).toHaveCount(1);
+  expect(posts).toBe(1);
+  const { bills } = await api<{ bills: { name: string }[] }>(page, 'get', `/groups/${groupId}/bills`);
+  expect(bills.map((b) => b.name)).toEqual(['Once only']);
+});
+
+const UNSAVED = 'You have unsaved changes. Leave without saving?';
+
+test('US-38 #1 #2 #3 on a group bill form, a changed tick or price asks "You have unsaved changes. Leave without saving?" before leaving: Stay keeps everything, Leave drops it', async ({ page }, info) => {
+  await signUpFast(page, info);
+  const { groupId, meId, ids } = await makeGroup(page, 'Guarded', '$', ['Ali']);
+  await postBill(page, groupId, billBody([meId, ids.Ali], meId, ['40.00'], { name: 'Dinner' }));
+  const dialog = page.getByRole('dialog', { name: UNSAVED });
+  const savedTotals = async () => (await api<{ bills: { totalCents: number }[] }>(page, 'get', `/groups/${groupId}/bills`)).bills.map((b) => b.totalCents);
+
+  // A new bill: unticking one person is a change. A sidebar link asks first, and Stay keeps the form as it was.
+  await openNewBill(page, groupId);
+  await tookPart(page).getByRole('checkbox', { name: 'Ali', exact: true }).uncheck();
+  await page.getByRole('link', { name: 'Dashboard' }).first().click();
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Stay' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Leave' })).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`/groups/${groupId}/bills/new$`));
+  await dialog.getByRole('button', { name: 'Stay' }).click();
+  await expect(dialog).toBeHidden();
+  await expect(tookPart(page).getByRole('checkbox', { name: 'Ali', exact: true })).not.toBeChecked();
+  // The "back" link asks too; Leave goes to the group and nothing was saved as a draft.
+  await page.getByRole('link', { name: '← Guarded' }).click();
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: 'Leave' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Guarded', exact: true })).toBeVisible();
+  expect(await savedTotals()).toEqual([4000]);
+
+  // The edit form of a saved bill: a changed price, then Cancel.
+  await page.getByRole('link', { name: /Dinner/ }).click();
+  await page.getByRole('link', { name: 'Edit bill' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Edit Dinner' })).toBeVisible();
+  await page.getByLabel('Item 1 price').fill('41.00');
+  await page.getByRole('link', { name: 'Cancel' }).click();
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: 'Stay' }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByLabel('Item 1 price')).toHaveValue('41.00');
+  await page.getByRole('link', { name: 'Cancel' }).click();
+  await dialog.getByRole('button', { name: 'Leave' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Dinner', exact: true })).toBeVisible();
+  await expect(page.getByTestId('grand-total')).toHaveText('$40.00');
+  expect(await savedTotals()).toEqual([4000]);
+});
+
+test('US-38 #5 on a group bill form nobody changed, and right after a save, leaving shows no warning', async ({ page }, info) => {
+  await signUpFast(page, info);
+  const { groupId, meId, ids } = await makeGroup(page, 'Unguarded', '$', ['Ali']);
+  const billId = await postBill(page, groupId, billBody([meId, ids.Ali], meId, ['40.00'], { name: 'Dinner' }));
+  const dialog = page.getByRole('dialog', { name: UNSAVED });
+
+  // Nothing changed on a new bill: the "back" link just goes.
+  await openNewBill(page, groupId);
+  await page.getByRole('link', { name: '← Unguarded' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Unguarded', exact: true })).toBeVisible();
+  await expect(dialog).toBeHidden();
+
+  // Nothing changed on the edit form of a saved bill: Cancel just goes.
+  await page.goto(`/groups/${groupId}/bills/${billId}/edit`);
+  await expect(page.getByRole('heading', { level: 1, name: 'Edit Dinner' })).toBeVisible();
+  await page.getByRole('link', { name: 'Cancel' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Dinner', exact: true })).toBeVisible();
+  await expect(dialog).toBeHidden();
+
+  // Just saved after a change: the app goes to the group's bills with no question.
+  await page.getByRole('link', { name: 'Edit bill' }).click();
+  await page.getByLabel('Item 1 price').fill('44.00');
+  await page.getByRole('button', { name: 'Save bill' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Unguarded', exact: true })).toBeVisible();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole('link', { name: /Dinner/ })).toContainText('$44.00');
 });

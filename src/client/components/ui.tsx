@@ -160,21 +160,22 @@ export function Alert({ children, tone = 'error' }: { children?: ReactNode; tone
 /** Grey placeholder shapes while data loads. */
 export function Skeleton({ lines = 3 }: { lines?: number }) {
   return (
-    <div className="skeleton-card" aria-busy="true" aria-label="Loading">
+    <div className="skeleton-card" role="status" aria-busy="true">
+      <span className="visually-hidden">Loading…</span>
       {Array.from({ length: lines }, (_, i) => (
-        <div key={i} className="skeleton-line" style={{ width: `${90 - i * 15}%` }} />
+        <div key={i} className="skeleton-line" aria-hidden="true" style={{ width: `${90 - i * 15}%` }} />
       ))}
     </div>
   );
 }
 
 /** What to do next when a list is empty. */
-export function EmptyState({ text, action }: { text: string; action?: { to: string; label: string } }) {
+export function EmptyState({ text, action }: { text: string; action?: { to: string; label: string; state?: unknown } }) {
   return (
     <div className="empty">
       <p>{text}</p>
       {action && (
-        <Link className="btn btn-primary" to={action.to}>
+        <Link className="btn btn-primary" to={action.to} state={action.state}>
           {action.label}
         </Link>
       )}

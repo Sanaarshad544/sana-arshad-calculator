@@ -59,12 +59,12 @@ These rules come from the spec and apply wherever a story mentions them.
 
 ## Implementation progress
 
-- **Last checked:** 22 Oct 2026, against the code in `src/`, after QA round 1 and its security and code reviews.
+- **Last checked:** 22 Oct 2026, against the code in `src/`, after the round 2 bill-screen redesign (read-only bills, item lines, name chips, the %/currency switch and the currency note) and its code reviews.
 - **Implemented:** all 40 stories.
 - **Retired:** US-24 "Rejoin a group with the invite code" was retired in QA round 1. There is no group-wide code any more, and removed members come back only through Restore (US-23).
 - **How it was checked:** `npm test` (run from `src/`) passed twice in a row:
-  - 215 unit and server tests.
-  - 269 browser tests, each run in Chromium (Chrome and Edge), Firefox and WebKit (Safari), 807 runs in all, with automatic WCAG 2.2 AA checks in light and dark mode.
+  - 224 unit and server tests.
+  - 380 browser tests, each run in Chromium (Chrome and Edge), Firefox and WebKit (Safari), 1,140 runs in all, with automatic WCAG 2.2 AA checks in light and dark mode.
 - **Checks done by hand,** because a test can't stop Docker or install the app from scratch:
   - US-27 #3: stopping the database while the app runs, then starting it again.
   - US-28: `docker compose down` then `docker compose up -d`, and restarting the app.
@@ -76,11 +76,12 @@ Where the tests are (all in `src/tests/`):
 
 | Stories | Tests |
 |---|---|
-| Money maths, rounding, input checks and wrong-try waits (US-02, US-05, US-13, US-14, US-16, US-17, US-25) | `unit/money.test.ts`, `unit/bill.test.ts`, `unit/limits.test.ts` |
+| Money maths, rounding, input checks and wrong-try waits (US-02, US-05, US-13, US-14, US-16, US-17, US-25) | `unit/money.test.ts`, `unit/bill.test.ts`, `unit/limits.test.ts`, `unit/billEditor.test.ts` |
 | Server rules for every story | `api/accounts.test.ts`, `api/solo.test.ts`, `api/groups.test.ts`, `api/criteria-*.test.ts`, `api/review-fixes.test.ts`, `api/attempt-limits.test.ts` |
 | Personal invites, adding people from other groups, renaming (US-10 to US-12, US-20, US-21, US-39 to US-41) | `api/invites.test.ts`, `e2e/round1-groups.spec.ts`, `e2e/round1-review.spec.ts` |
 | Accounts, solo bills and input messages in the browser (US-01 to US-08, US-25 to US-27, US-34, US-35) | `e2e/accounts.spec.ts`, `e2e/solo.spec.ts`, `e2e/criteria-solo.spec.ts`, `e2e/criteria-extra.spec.ts`, `e2e/round1-solo.spec.ts` |
 | Groups, bills, balances and settle-ups in the browser (US-09 to US-19) | `e2e/groups.spec.ts`, `e2e/criteria-groups.spec.ts`, `e2e/round1-groups.spec.ts` |
+| Read-only bills, Edit bill, item lines, tick chips, charges as % or amount, the currency note, and back to the list after saving (US-05 to US-08, US-13, US-14, US-18, US-26, US-39) | `e2e/round2-bills.spec.ts`, `e2e/criteria-solo.spec.ts`, `e2e/criteria-groups.spec.ts` |
 | Members leaving and coming back (US-20 to US-23) | `e2e/groups.spec.ts`, `e2e/criteria-members.spec.ts`, `e2e/round1-members.spec.ts` |
 | Dashboard, navigation, appearance, accessibility, feedback and unsaved changes (US-33 to US-38) | `e2e/layout.spec.ts`, `e2e/ux.spec.ts`, `e2e/criteria-members.spec.ts`, `e2e/round1-members.spec.ts` |
 
@@ -214,6 +215,8 @@ Acceptance criteria:
 13. Given no items, when I press Calculate, then I see "Add at least one item" and no result.
 14. Given any invalid field (see US-25), when I press Calculate, then no result is shown.
 15. Given an empty tax box, when I type 5, then the box shows "5" (not "05"), and a tax left blank counts as 0.
+16. Given I'm typing items, when I press Enter in an item's name, then the cursor moves to its price. Pressing Enter in a price moves to the next item, adding a new line after the last one, so a whole bill can be typed without the mouse. Enter on an empty last line calculates instead. "+ Add item" also puts the cursor in the new line, and removing a line moves the cursor to the next line (or the one before, if it was the last, or to "+ Add item" when no lines are left). An empty line (no name, no price and, split by items, nobody ticked) is left out when calculating and saving.
+17. Given tax, other charges or tip, then each has one box and a switch between "%" and the bill's currency symbol (e.g. "Rs"). Tapping the switch also puts the cursor in the box, ready to type.
 
 ### US-06 Choose the currency of a solo bill
 **As a** Solo diner, **I want** to pick the currency symbol for my bill, **so that** amounts are shown the way I paid them.
@@ -226,7 +229,7 @@ Acceptance criteria:
 4. Given "Other" with a blank symbol, a symbol of 4+ characters (e.g. "abcd") or one containing a digit (e.g. "R1"), when I press Calculate or Save, then I see "Enter a currency symbol of up to 3 characters, with no digits" and nothing is saved.
 5. Given "Other" with " kr " (spaces around it), then it's saved as "kr".
 6. Given an unsaved bill, I can change its currency freely.
-7. Given the bill has been saved once, when I edit it, then the currency can't be changed.
+7. Given the bill has been saved once, when I edit it, then the currency is shown as fixed, with "A saved bill keeps its currency. To use a different one, delete this bill and add it again with the right currency."
 8. Given an invalid currency symbol is sent straight to the server, then it's rejected and nothing is saved.
 
 ### US-07 Save a solo bill to my history
@@ -234,7 +237,7 @@ Acceptance criteria:
 - **Job:** J2 · **Status:** Implemented
 
 Acceptance criteria:
-1. Given a valid solo bill, when I save it, then it appears at the top of my history (newest first) showing its name, date, currency and total.
+1. Given a valid solo bill, when I save it, then I'm taken to my history, where it appears at the top (newest first) marked "Saved", showing its name, date, currency and total. Pressing Back from there doesn't show the history a second time.
 2. Given I leave the name empty, when I save, then the bill is named "Bill – date" (using the bill's date).
 3. Given a bill name of exactly 60 characters, then it's accepted. A name of 61 or more characters shows a clear message and the bill isn't saved.
 4. Given the bill has an invalid field (see US-25), when I press Save, then the field's message is shown and nothing is saved.
@@ -245,11 +248,12 @@ Acceptance criteria:
 - **Job:** J2 · **Status:** Implemented
 
 Acceptance criteria:
-1. Given a saved solo bill, when I open it, then every input and result is shown exactly as saved, including other charges and its % / amount setting, and the "tip on" setting.
-2. Given I change an amount and save, then the totals are recalculated and checked with the same rules as a new bill. Invalid edits show the same messages and aren't saved.
-3. Given I edit other charges (value or % / amount), when I save, then the total is recalculated to match.
-4. Given I'm editing a saved bill, then its currency can't be changed.
-5. Given I press Delete, then I'm asked to confirm. Cancel keeps the bill unchanged, and Confirm removes it from my history.
+1. Given a saved solo bill, when I open it, then I see it read-only, as a receipt: each item and its price, the subtotal, tax, other charges and tip (with their rates) and the total, with "Edit bill" and "Delete". Nothing can be changed on this page.
+2. Given I press "Edit bill", then the form opens with every input and result exactly as saved, including other charges and its % / amount setting, and the "tip on" setting. "Cancel" goes back to the receipt.
+3. Given I change an amount and save, then the totals are recalculated and checked with the same rules as a new bill, and I'm taken to my history with the bill marked "Saved". Invalid edits show the same messages and aren't saved.
+4. Given I edit other charges (value or % / amount), when I save, then the total is recalculated to match.
+5. Given I'm editing a saved bill, then its currency can't be changed (US-06 #7).
+6. Given I press Delete, then I'm asked to confirm. Cancel keeps the bill unchanged, and Confirm removes it from my history.
 
 ---
 
@@ -328,6 +332,8 @@ Acceptance criteria:
 8. Given no participants are selected, when I press Calculate, then I see "Choose who took part" and no result (no division by zero).
 9. Given no items, when I press Calculate, then I see "Add at least one item" and no result.
 10. Given an equal-split bill, then tax, other charges and tip follow the shared rules above, including the "tip on" option.
+11. Given a new group bill, then every current member starts ticked under "Who took part", shown as name chips, and I start as the payer. "Everyone" ticks or unticks them all at once.
+12. Given "How to split", then it's a two-way switch, "Equally" or "By items", with a line underneath saying what the chosen way means.
 
 ### US-14 Record an itemized group bill
 **As a** Group member, **I want** to record which items each person had, including shared dishes, **so that** everyone pays for what they had plus a fair part of tax, other charges and tip.
@@ -343,9 +349,9 @@ Acceptance criteria:
 7. Given a participant with no items, and other charges of 5.00 on the bill, then that participant's other-charges part is 0.00, and they owe 0.00 in total (items, tax, other charges and tip).
 8. Given an item with nobody ticked, when I press Calculate, then I see "Choose who shared this item" next to it and no result.
 9. Given any valid itemized bill, then the per-person totals add up exactly to the grand total.
-10. Given an item row, when I open its people dropdown, then it lists only this bill's participants, each with a tick box, and I can tick one or several.
-11. Given I've ticked Ali, Sara and Omar for an item and closed the dropdown, then the row shows "Ali, Sara, Omar".
-12. Given I untick a participant from the bill, then they disappear from every item's dropdown, and items left with nobody ticked show "Choose who shared this item" when I press Calculate.
+10. Given "By items", then each item shows "Shared by" with a name chip for each of this bill's participants, plus "Everyone". I tick one or several by tapping them, with no dropdown to open.
+11. Given I tap "Everyone" on an item, then all of the bill's participants are ticked for it; tapping it again unticks them all.
+12. Given I untick a participant from the bill, then they disappear from every item's chips and aren't counted, and items left with nobody ticked show "Choose who shared this item" when I press Calculate. Ticking them again brings back their ticks on each item.
 
 ### US-15 Record who paid a group bill
 **As a** Group member, **I want** to record which participant paid the bill, **so that** they're credited and the others owe them.
@@ -390,10 +396,10 @@ Acceptance criteria:
 
 Acceptance criteria:
 1. Given any current member, then they can edit or delete any bill or settle-up in the group, not just their own.
-2. Given I edit a bill or settle-up and save, then it's checked with the same rules as a new one, and the balances update.
-3. Given I reopen a group bill with other charges, then its value and % / amount setting are shown exactly as saved, and editing them recalculates the bill and the balances.
+2. Given I edit a bill or settle-up and save, then it's checked with the same rules as a new one, and the balances update. After saving a bill (new or edited), I'm taken to the group's bill list with it marked "Saved". When the bill was added from the Bills tab, pressing Back from there doesn't show the group a second time.
+3. Given I open a saved group bill, then I see it read-only, as a receipt: its items (and, split by items, who shared each), subtotal, tax, other charges, tip, total, who paid and each person's share, with "Edit bill" and "Delete". Given I press "Edit bill", then every input is shown exactly as saved, including other charges and its % / amount setting, and editing them recalculates the bill and the balances.
 4. Given I press Delete on a bill, then I'm asked to confirm. Cancel keeps it, and Confirm removes it and updates the balances.
-5. Given a bill or settle-up that includes a removed member, when I try to edit or delete it, then I see "Restore Omar to change this bill" and nothing changes. A message about Delete shows at the top of the page, next to the Delete button.
+5. Given a bill or settle-up that includes a removed member, then it can't be changed: a bill shows no "Edit bill" button (its edit address shows the read-only bill instead), a settle-up's Save shows "Restore Omar to change this bill", and Delete on either shows that message and changes nothing. A message about Delete shows at the top of the page, next to the Delete button.
 
 ### US-19 See the group's activity log
 **As a** Group member, **I want** a log of every change in the group, **so that** I can see who did what and when.
@@ -421,7 +427,7 @@ Acceptance criteria:
 3. Given a member has balance 0.00 but hasn't been removed, then they're still a normal current member (settled isn't the same as removed).
 4. Given Omar is removed, when I open "Pizza night" (which he paid for), then it shows "Omar (removed)" as payer and participant, and the bill's totals and everyone's balances are exactly as before.
 5. Given Omar is removed, when I add a new bill or settle-up, then he isn't offered as payer, participant or settle-up person, and he isn't in the balance list or the suggestions.
-6. Given Omar is removed, when I try to edit or delete a bill or settle-up that includes him, then I see "Restore Omar to change this bill" and nothing changes.
+6. Given Omar is removed, then bills and settle-ups that include him can't be changed: a bill has no "Edit bill" button and says it's view only until Omar is restored, and Delete (or a settle-up's Save) shows "Restore Omar to change this bill". Nothing changes.
 7. Given Omar has an account and is removed, then the group disappears from his group list right away, and opening its address shows that he no longer has access. His account and solo bills are unchanged.
 8. Given Omar has an account and is removed, then everyone in the group who hasn't joined yet gets a new invite code, so an invite link he saw can't bring him back under their name (US-11 #7).
 
@@ -484,7 +490,7 @@ Acceptance criteria:
 11. Given a bill with 200 items, when I add another, then I see "A bill can have at most 200 items" and no item is added.
 12. Given 3 items of 1,000,000.00 each, when I press Calculate, then the items subtotal is 3,000,000.00 with no error (the limit is per field, not per total).
 13. Given 200 items of 1,000,000.00 each, tax 100%, other charges 100% and tip 100% on items + tax, when I press Calculate, then the result is an items subtotal of 200,000,000.00, tax 200,000,000.00, other charges 200,000,000.00, tip 400,000,000.00, and grand total exactly 1,000,000,000.00.
-14. Given an item name left blank, then it's shown as "Item N" by its position. An item name of exactly 40 characters is accepted, and 41 or more shows a clear message and no result.
+14. Given an item name left blank, then on the saved bill it's shown as "Item N" by its position among the bill's items (spare empty lines don't count); on the form, the box shows the number of its line. An item name of exactly 40 characters is accepted, and 41 or more shows a clear message and no result.
 15. Given any input at all, then the app never shows NaN, Infinity, "undefined", or a blank or crashed screen.
 16. Given invalid data is sent straight to the server, bypassing the page, then the server rejects it and saves nothing.
 17. Given I type "1,000.50" or "1000.50" in a money field, then both are accepted as 1000.50.
@@ -500,12 +506,12 @@ Acceptance criteria:
 2. Given a result is showing, when I change any input, then the old result is hidden until I press Calculate again.
 3. Given a result is showing, when I switch tax, tip or other charges between % and amount, or change the "tip on" option, then the old result is hidden until I press Calculate again.
 4. Given I press Calculate several times without changing anything, then the same result is shown each time.
-5. Given a new bill form, then the results area below the form reads "Press Calculate to see results".
-6. Given valid inputs, when I press Calculate, then the results appear below the form, on every screen size, and the page scrolls down to them.
+5. Given a new bill form, then the results area reads "Press Calculate to see results". Calculate sits just above it and "Save bill" just below: beside the form on a wide screen (1180 px or wider), under the form on narrower screens and phones.
+6. Given valid inputs, when I press Calculate, then the results appear in that area on every screen size, and the page scrolls to them if they're out of view.
 7. Given results are showing, when I change any input, then the results area goes back to "Press Calculate to see results".
 8. Given a bill in Rs with a total of 1234567.5 and a share of 400, then the results show "Rs 1,234,567.50" and "Rs 400.00". In $ they show "$1,234,567.50" and "$400.00".
 9. Given a field is showing an error, when I edit that field, then its error disappears straight away, before I press Calculate.
-10. Given results are showing, then each % line shows its rate, e.g. "Tax (5%)", "Other charges (10%)", "Tip (15% of items)" or "Tip (15% of items + tax)".
+10. Given results are showing, then each % line shows its rate, e.g. "Tax (5%)", "Other charges (10%)", "Tip (15% of items)" or "Tip (15% of items + tax)". A blank or 0% charge shows no rate.
 11. Given a bill form, then the "Save bill" button sits under the results, with any message about saving just above it. When the server rejects a field, the cursor moves to that field.
 
 ### US-27 Keep my inputs when saving fails
@@ -579,7 +585,7 @@ Acceptance criteria:
 - **Job:** J22 · **Status:** Implemented
 
 Acceptance criteria:
-1. Given I use only the keyboard, then I can sign up, log in, create a group, add members, add an itemized bill (including choosing people in the item dropdowns), calculate, save, record a settle-up and log out, with a clearly visible focus outline at every step.
+1. Given I use only the keyboard, then I can sign up, log in, create a group, add members, add an itemized bill (including ticking who shared each item), calculate, save, record a settle-up and log out, with a clearly visible focus outline at every step.
 2. Given a confirmation dialog is open, then keyboard focus stays inside it, and Esc closes it the same way as Cancel.
 3. Given a screen reader, then every field has a label, each error is read out with its field, and new results and success messages are announced.
 4. Given 200% browser zoom, then every page is still usable with no lost content or functions.
@@ -620,6 +626,7 @@ Acceptance criteria:
 2. Given I change the currency (e.g. $ to PKR), then every amount in the group shows the new symbol, nothing is converted, and the log records "X changed the currency from $ to PKR".
 3. Given a blank or 51-character name, or a bad currency symbol, then the same messages as when creating a group are shown and nothing changes.
 4. Given someone who isn't a current member, then they can't change the group, even by sending requests straight to the server.
+5. Given the group page or a group bill form, then "Currency: Rs" has a small info button. Pressing it explains that the currency is only a symbol and nothing is converted, and that changing it in Edit group changes the symbol on every bill in the group while the numbers stay the same.
 
 ### US-40 Rename a member
 **As a** Group member, **I want** to change a member's name, **so that** typos like "ghania" can be fixed.

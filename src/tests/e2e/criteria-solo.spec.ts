@@ -46,7 +46,10 @@ async function setCharge(page: Page, label: ChargeLabel, mode: Mode, value: stri
 
 const calculate = (page: Page) => page.getByRole('button', { name: 'Calculate' }).click();
 const saveBill = (page: Page) => page.getByRole('button', { name: 'Save bill' }).click();
+/** The results area of the editor: a region named "Results" (under the form, or beside it on a computer). */
 const results = (page: Page) => page.getByRole('region', { name: 'Results' });
+/** A saved bill's read-only receipt: a region named "Bill". */
+const receipt = (page: Page) => page.getByRole('region', { name: 'Bill', exact: true });
 const grandTotal = (page: Page) => page.getByTestId('grand-total');
 
 type LineName = 'Subtotal' | 'Tax' | 'Other charges' | 'Tip' | 'Total';
@@ -54,22 +57,26 @@ type LineName = 'Subtotal' | 'Tax' | 'Other charges' | 'Tip' | 'Total';
 /**
  * One line of the totals: Subtotal, Tax, Other charges, Tip or Total. A % line also carries its
  * rate in its label ("Tax (5%)", "Tip (15% of items + tax)"), so the name is matched with or without one.
+ * The totals sit in the editor's "Results" region by default, or in `within` (e.g. a saved bill's receipt).
  */
-function totalRow(page: Page, name: LineName): Locator {
-  return results(page)
+function totalRow(page: Page, name: LineName, within: Locator = results(page)): Locator {
+  return within
     .locator('dl.totals > div')
     .filter({ has: page.locator('dt', { hasText: new RegExp(`^${name}( \\(.+\\))?$`) }) });
 }
 
 /** The value cell of one line of the totals. */
-const totalLine = (page: Page, name: LineName) => totalRow(page, name).locator('dd');
+const totalLine = (page: Page, name: LineName, within?: Locator) => totalRow(page, name, within).locator('dd');
 
 /** The label cell of one line of the totals. */
-const totalLabel = (page: Page, name: LineName) => totalRow(page, name).locator('dt');
+const totalLabel = (page: Page, name: LineName, within?: Locator) => totalRow(page, name, within).locator('dt');
 
-/** What a charge's line should read: its name, plus its rate when it is a % (a tip also says what it is a % of). */
+/**
+ * What a charge's line should read: its name, plus its rate when it is a non-zero % (a tip also says what it
+ * is a % of). An amount, and a blank or 0% charge, show no rate (US-26 #10).
+ */
 function lineLabel(name: ChargeLabel, charge: { mode: Mode; value: string }, tipOn: 'items' | 'items_tax' = 'items'): string {
-  if (charge.mode === 'amount') return name;
+  if (charge.mode === 'amount' || charge.value.trim() === '' || Number(charge.value) === 0) return name;
   const of = name === 'Tip' ? ` of ${tipOn === 'items_tax' ? 'items + tax' : 'items'}` : '';
   return `${name} (${charge.value}%${of})`;
 }
@@ -262,7 +269,7 @@ test('US-04 #1 logged out, typing a group or solo bill address shows the Log in 
   for (const r of dataResponses) expect(r.status, r.url).toBe(401);
 });
 
-test("US-04 #2 another account's solo bill is not shown", async ({ page }, info) => {
+test("US-04 #2 another account's solo bill is not shown, on its receipt address or its edit address", async ({ page }, info) => {
   await signUpFast(page, info, 'owner');
   const { bill } = await api<{ bill: { id: string } }>(page, 'post', '/solo-bills', {
     currency: '$',
@@ -279,14 +286,17 @@ test("US-04 #2 another account's solo bill is not shown", async ({ page }, info)
   // A different account signs up in the same browser and types the address.
   await page.context().clearCookies();
   await signUpFast(page, info, 'other');
-  await page.goto(`/solo/${bill.id}`);
-  await expect(page.getByText(MSG.notFound)).toBeVisible();
-  await expect(page.getByText('Secret dinner')).toHaveCount(0);
-  await expect(page.getByText('Wagyu')).toHaveCount(0);
-  await expect(page.getByText('123.45')).toHaveCount(0);
-  await expect(page.getByLabel('Item 1 price')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Delete' })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Save bill' })).toHaveCount(0);
+  for (const path of [`/solo/${bill.id}`, `/solo/${bill.id}/edit`]) {
+    await page.goto(path);
+    await expect(page.getByText(MSG.notFound), path).toBeVisible();
+    await expect(page.getByText('Secret dinner'), path).toHaveCount(0);
+    await expect(page.getByText('Wagyu'), path).toHaveCount(0);
+    await expect(page.getByText('123.45'), path).toHaveCount(0);
+    await expect(page.getByLabel('Item 1 price'), path).toHaveCount(0);
+    await expect(page.getByRole('link', { name: 'Edit bill' }), path).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Delete' }), path).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Save bill' }), path).toHaveCount(0);
+  }
 });
 
 // ======================================================================
@@ -491,13 +501,22 @@ test.describe('US-06 #4 a bad "Other" currency symbol is refused on Calculate an
 // US-07 Save a solo bill to my history
 // ======================================================================
 
-test('US-07 #1 a saved bill is first in the history with its name, date, currency and total', async ({ page }, info) => {
+/** The rows of the history ("Solo bills"), newest first. */
+const historyRows = (page: Page) => page.getByRole('main').getByRole('listitem');
+
+test('US-07 #1 saving a bill takes me to my history, where it is at the top (newest first), marked "Saved", with its name, date, currency and total', async ({ page }, info) => {
   await newSoloPage(page, info);
   await page.getByLabel('Currency', { exact: true }).selectOption('€');
   await page.getByLabel('Bill name').fill('Older lunch');
   await page.getByLabel('Item 1 price').fill('8.00');
   await saveBill(page);
+  // Taken to the history, not left on the form or sent to the bill.
+  await expect(page.getByRole('heading', { level: 1, name: 'Solo bills' })).toBeVisible();
+  await expect(page).toHaveURL(/\/solo$/);
   await expect(page.getByRole('status').getByText('Bill saved')).toBeVisible();
+  await expect(historyRows(page)).toHaveCount(1);
+  await expect(historyRows(page).first()).toContainText('Older lunch');
+  await expect(historyRows(page).first().getByText('Saved', { exact: true })).toBeVisible();
 
   await openNewSolo(page);
   await page.getByLabel('Currency', { exact: true }).selectOption('€');
@@ -506,18 +525,20 @@ test('US-07 #1 a saved bill is first in the history with its name, date, currenc
   await page.getByRole('button', { name: '+ Add item' }).click();
   await page.getByLabel('Item 2 price').fill('7.25');
   await saveBill(page);
-  await expect(page.getByRole('heading', { level: 1, name: 'Pasta night' })).toBeVisible();
-
-  await page.getByRole('link', { name: 'Solo bills' }).first().click();
   await expect(page.getByRole('heading', { level: 1, name: 'Solo bills' })).toBeVisible();
-  const rows = page.getByRole('list').filter({ has: page.getByRole('link', { name: /Pasta night/ }) }).getByRole('link');
+  await expect(page).toHaveURL(/\/solo$/);
+
+  const rows = historyRows(page);
   await expect(rows).toHaveCount(2);
   const top = rows.first();
   await expect(top).toContainText('Pasta night');
   await expect(top).toContainText(/\b\d{1,2} [A-Z][a-z]{2,3} \d{4}\b/);
   await expect(top).toContainText('€');
   await expect(top).toContainText('€19.75');
+  // Only the bill just saved is marked; the older one is listed below it, unmarked.
+  await expect(top.getByText('Saved', { exact: true })).toBeVisible();
   await expect(rows.nth(1)).toContainText('Older lunch');
+  await expect(rows.nth(1).getByText('Saved', { exact: true })).toHaveCount(0);
 
   // The date shown is the bill's own date, in "21 Oct 2026" style.
   const [{ id }] = await savedBills(page);
@@ -568,7 +589,10 @@ test('US-07 #4 an invalid price stops Save: its message is shown and nothing is 
 // US-08 Open, edit and delete saved solo bills
 // ======================================================================
 
-/** Saves the bill used by the US-08 tests and returns its id. */
+/**
+ * Saves the bill used by the US-08 tests (every charge set; the total is 129.28) and returns its id.
+ * Saving ends in the history ("Solo bills"), with the bill marked "Saved".
+ */
 async function saveChargedBill(page: Page): Promise<string> {
   await page.getByLabel('Bill name').fill('Charged dinner');
   await page.getByLabel('Item 1 price').fill('100.00');
@@ -580,23 +604,31 @@ async function saveChargedBill(page: Page): Promise<string> {
   // 100.00 + tax 8.25 + other 7.50 + tip 12.5% of 108.25 (13.53) = 129.28
   await expect(grandTotal(page)).toHaveText('$129.28');
   await saveBill(page);
-  await expect(page.getByRole('heading', { level: 1, name: 'Charged dinner' })).toBeVisible();
-  await expect(page).toHaveURL(/\/solo\/\d+$/);
+  await expect(page.getByRole('heading', { level: 1, name: 'Solo bills' })).toBeVisible();
+  await expect(historyRows(page).first().getByText('Saved', { exact: true })).toBeVisible();
   const [{ id }] = await savedBills(page);
   return id;
 }
 
-async function reopenFromHistory(page: Page, name: string | RegExp): Promise<void> {
-  await page.getByRole('link', { name: 'Solo bills' }).first().click();
-  await expect(page.getByRole('heading', { level: 1, name: 'Solo bills' })).toBeVisible();
-  await page.getByRole('link', { name }).click();
-  await expect(page.getByRole('heading', { level: 1, name })).toBeVisible();
+/** From the history, opens a saved bill: its read-only receipt, titled with the bill's name. */
+async function openFromHistory(page: Page, name: string): Promise<void> {
+  await page.getByRole('link', { name: new RegExp(name) }).click();
+  await expect(page.getByRole('heading', { level: 1, name, exact: true })).toBeVisible();
+  await expect(page).toHaveURL(/\/solo\/\d+$/);
 }
 
-test('US-08 #1 reopening shows every input, the % / amount settings and the "tip on" choice as saved', async ({ page }, info) => {
+/** From a saved bill's receipt, presses "Edit bill": the form opens, titled "Edit <name>". */
+async function openEditor(page: Page, name: string): Promise<void> {
+  await page.getByRole('link', { name: 'Edit bill' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: `Edit ${name}`, exact: true })).toBeVisible();
+  await expect(page).toHaveURL(/\/solo\/\d+\/edit$/);
+}
+
+test('US-08 #2 "Edit bill" opens the form with every input, the % / amount settings, the "tip on" choice and the results as saved, and "Cancel" goes back to the receipt', async ({ page }, info) => {
   await newSoloPage(page, info);
-  await saveChargedBill(page);
-  await reopenFromHistory(page, /Charged dinner/);
+  const id = await saveChargedBill(page);
+  await openFromHistory(page, 'Charged dinner');
+  await openEditor(page, 'Charged dinner');
 
   await expect(page.getByLabel('Item 1 price')).toHaveValue('100.00');
   await expect(chargeBox(page, 'Tax')).toHaveValue('8.25');
@@ -617,44 +649,87 @@ test('US-08 #1 reopening shows every input, the % / amount settings and the "tip
   await expect(totalLabel(page, 'Tax')).toHaveText('Tax (8.25%)');
   await expect(totalLabel(page, 'Other charges')).toHaveText('Other charges');
   await expect(totalLabel(page, 'Tip')).toHaveText('Tip (12.5% of items + tax)');
+
+  // The edit page has no Delete (that lives on the receipt), and both ways back lead to the receipt.
+  await expect(page.getByRole('button', { name: 'Delete' })).toHaveCount(0);
+  await expect(page.getByRole('link', { name: /Charged dinner/ })).toHaveAttribute('href', `/solo/${id}`);
+  const cancel = page.getByRole('link', { name: 'Cancel' });
+  await expect(cancel).toHaveAttribute('href', `/solo/${id}`);
+  // "Cancel" goes back to the receipt, which still shows the bill as it was saved.
+  await cancel.click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Charged dinner', exact: true })).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`/solo/${id}$`));
+  await expect(page.getByRole('link', { name: 'Edit bill' })).toBeVisible();
+  await expect(grandTotal(page)).toHaveText('$129.28');
 });
 
-test('US-08 #3 editing other charges to 10% and saving recalculates the total', async ({ page }, info) => {
+test('US-08 #3 an invalid edit shows the same message as a new bill, and nothing is saved', async ({ page }, info) => {
   await newSoloPage(page, info);
   const id = await saveChargedBill(page);
-  await reopenFromHistory(page, /Charged dinner/);
-
-  await setCharge(page, 'Other charges', 'percent', '10');
-  await saveBill(page);
-  await expect(page.getByRole('status').getByText('Bill saved').first()).toBeVisible();
-  // 100.00 + 8.25 + 10.00 (10% of items) + 13.53 = 131.78
-  await expect(totalLine(page, 'Other charges')).toHaveText('$10.00');
-  await expect(totalLabel(page, 'Other charges')).toHaveText('Other charges (10%)');
-  await expect(grandTotal(page)).toHaveText('$131.78');
-  const detail = await api<{ bill: { totalCents: number } }>(page, 'get', `/solo-bills/${id}`);
-  expect(detail.bill.totalCents).toBe(13178);
-
-  // Reopened again, the new setting is what is shown.
-  await page.reload();
-  await expect(page.getByRole('heading', { level: 1, name: 'Charged dinner' })).toBeVisible();
-  await expect(chargeBox(page, 'Other charges')).toHaveValue('10');
-  await expect(chargeGroup(page, 'Other charges').getByRole('radio', { name: 'Percentage' })).toBeChecked();
-});
-
-test('US-08 #2 editing a price to "abc" and saving shows the message and keeps the saved total', async ({ page }, info) => {
-  await newSoloPage(page, info);
-  const id = await saveChargedBill(page);
-  await reopenFromHistory(page, /Charged dinner/);
+  await openFromHistory(page, 'Charged dinner');
+  await openEditor(page, 'Charged dinner');
 
   await page.getByLabel('Item 1 price').fill('abc');
   await saveBill(page);
   await expect(page.getByText(MSG.price, { exact: true })).toBeVisible();
   await expect(page.getByLabel('Item 1 price')).toHaveAccessibleDescription(MSG.price);
-  await expect(page.getByText('Bill saved')).toHaveCount(0);
+  // Still on the form, and the saved bill is exactly as it was.
+  await expect(page).toHaveURL(/\/solo\/\d+\/edit$/);
   const detail = await api<{ bill: { totalCents: number } }>(page, 'get', `/solo-bills/${id}`);
   expect(detail.bill.totalCents).toBe(12928);
   const [row] = await savedBills(page);
   expect(row.totalCents).toBe(12928);
+});
+
+test('US-08 #4 editing other charges (value and % / amount) and saving recalculates the total', async ({ page }, info) => {
+  await newSoloPage(page, info);
+  const id = await saveChargedBill(page);
+  await openFromHistory(page, 'Charged dinner');
+  await openEditor(page, 'Charged dinner');
+
+  // From 7.50 (amount) to 10 (%).
+  await setCharge(page, 'Other charges', 'percent', '10');
+  await saveBill(page);
+  // 100.00 + 8.25 + 10.00 (10% of items) + 13.53 = 131.78
+  await expect(page.getByRole('heading', { level: 1, name: 'Solo bills' })).toBeVisible();
+  await expect(historyRows(page).first()).toContainText('$131.78');
+  const detail = await api<{ bill: { totalCents: number } }>(page, 'get', `/solo-bills/${id}`);
+  expect(detail.bill.totalCents).toBe(13178);
+
+  // The receipt shows the new line and its rate.
+  await openFromHistory(page, 'Charged dinner');
+  await expect(totalLine(page, 'Other charges', receipt(page))).toHaveText('$10.00');
+  await expect(totalLabel(page, 'Other charges', receipt(page))).toHaveText('Other charges (10%)');
+  await expect(grandTotal(page)).toHaveText('$131.78');
+
+  // Edited again, even after a reload, the new setting is what is shown.
+  await openEditor(page, 'Charged dinner');
+  await page.reload();
+  await expect(page.getByRole('heading', { level: 1, name: 'Edit Charged dinner', exact: true })).toBeVisible();
+  await expect(chargeBox(page, 'Other charges')).toHaveValue('10');
+  await expect(chargeGroup(page, 'Other charges').getByRole('radio', { name: 'Percentage' })).toBeChecked();
+});
+
+test("US-08 #5 a saved bill's currency can't be changed while editing it: no picker is offered, and saving keeps it", async ({ page }, info) => {
+  await newSoloPage(page, info);
+  await page.getByLabel('Currency', { exact: true }).selectOption('€');
+  await page.getByLabel('Bill name').fill('Euro dinner');
+  await page.getByLabel('Item 1 price').fill('20');
+  await saveBill(page);
+  await expect(page.getByRole('heading', { level: 1, name: 'Solo bills' })).toBeVisible();
+  await expect(historyRows(page).first()).toContainText('€20.00');
+
+  await openFromHistory(page, 'Euro dinner');
+  await openEditor(page, 'Euro dinner');
+  await expect(page.getByLabel('Currency', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('Currency symbol')).toHaveCount(0);
+  await expect(page.getByRole('main').locator('select')).toHaveCount(0);
+  await page.getByLabel('Item 1 price').fill('30');
+  await saveBill(page);
+  await expect(page.getByRole('heading', { level: 1, name: 'Solo bills' })).toBeVisible();
+  await expect(historyRows(page).first()).toContainText('€30.00');
+  const [bill] = await savedBills(page);
+  expect(bill).toMatchObject({ name: 'Euro dinner', currency: '€', totalCents: 3000 });
 });
 
 // ======================================================================
@@ -664,6 +739,9 @@ test('US-08 #2 editing a price to "abc" and saving shows the message and keeps t
 for (const via of ['Calculate', 'Save bill'] as const) {
   test(`US-25 #1 item price "abc", "-5", "1.234", "1000000.01" or blank gets the price message on ${via}`, async ({ page }, info) => {
     await newSoloPage(page, info);
+    // The line has a name, so a blank price is a mistake on a line that counts. (A line with neither a
+    // name nor a price is left out when calculating and saving: that is US-05 #16, proved in round2-bills.spec.ts.)
+    await page.getByLabel('Item 1 name').fill('Pasta');
     const price = page.getByLabel('Item 1 price');
     await price.fill('10');
     await expectRejected(page, price, MSG.price, ['abc', '-5', '1.234', '1000000.01', ''], '10', via);
@@ -878,8 +956,9 @@ test('US-26 #6 at 375 px wide, Calculate brings the results region into view', a
   // The form is taller than the screen, so back at the top the results are off screen.
   await page.evaluate(() => window.scrollTo(0, 0));
   await expect(results(page)).not.toBeInViewport();
-  // Enter in a field is Calculate; this avoids Playwright scrolling the button into view for us.
-  await page.getByLabel('Item 1 price').focus();
+  // Enter in the bill name is Calculate (Enter in an item's price now moves to the next item). Using it
+  // avoids Playwright scrolling the Calculate button into view for us.
+  await page.getByLabel('Bill name').focus();
   await page.keyboard.press('Enter');
   await expect(grandTotal(page)).toBeVisible();
   await expect(results(page).getByRole('heading', { name: 'Results' })).toBeInViewport();

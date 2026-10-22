@@ -74,6 +74,7 @@ export function NewGroupPage() {
         const r = await api.post<{ groupId: string }>('/groups', { name, currency });
         toast('Group created');
         navigate(`/groups/${r.groupId}`, { replace: true });
+        return 'leaving';
       } catch (err) {
         const apiErr = err as ApiError;
         setErrors(apiErr.fields);
@@ -245,6 +246,7 @@ function EditGroupForm({ group }: { group: GroupDetail }) {
         await api.put(`/groups/${group.id}`, { name, currency });
         toast('Group saved');
         navigate(`/groups/${group.id}`);
+        return 'leaving';
       } catch (err) {
         const apiErr = err as ApiError;
         setErrors(apiErr.fields);

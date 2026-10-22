@@ -108,18 +108,26 @@ test('US-35 appearance follows the device, and the choice is saved with the acco
   await expect.poll(bg).toBe(dark);
 });
 
-test('US-36 a keyboard-only flow, with focus kept inside dialogs', async ({ page, browserName }, info) => {
+test('US-36 #1/#2 a keyboard-only flow, with focus kept inside dialogs', async ({ page, browserName }, info) => {
   // Safari on a Mac moves between buttons with Option+Tab.
   const tab = browserName === 'webkit' ? 'Alt+Tab' : 'Tab';
   await signUpFast(page, info);
   await page.goto('/solo/new');
   await page.getByLabel('Item 1 price').focus();
   await page.keyboard.type('12.50');
-  await page.keyboard.press('Enter'); // the form's Enter is Calculate
+  await page.getByLabel('Bill name').focus();
+  await page.keyboard.type('Keyboard lunch');
+  // Enter in the bill name is Calculate (Enter in an item's price moves on to the next item instead).
+  await page.keyboard.press('Enter');
   await expect(page.getByTestId('grand-total')).toHaveText('$12.50');
   await page.getByRole('button', { name: 'Save bill' }).focus();
   await page.keyboard.press('Enter');
   await expect(page.getByRole('status').getByText('Bill saved')).toBeVisible();
+  // Saving leads to the history. A saved bill opens as a read-only receipt, and that is where Delete is.
+  await expect(page.getByRole('heading', { level: 1, name: 'Solo bills' })).toBeVisible();
+  await page.getByRole('link', { name: /Keyboard lunch/ }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('heading', { level: 1, name: 'Keyboard lunch', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Delete' }).focus();
   await page.keyboard.press('Enter');
   const dialog = page.getByRole('dialog');
@@ -137,6 +145,8 @@ test('US-36 a keyboard-only flow, with focus kept inside dialogs', async ({ page
 
 for (const scheme of ['light', 'dark'] as const) {
   test(`US-36 #6 no WCAG 2.2 AA problems (${scheme})`, async ({ page }, info) => {
+    // Many pages are scanned one after the other.
+    test.setTimeout(90_000);
     await page.emulateMedia({ colorScheme: scheme });
     await page.goto('/login');
     await expect(page.getByRole('heading', { name: 'Log in' })).toBeVisible();
@@ -150,7 +160,13 @@ for (const scheme of ['light', 'dark'] as const) {
 
     await page.goto('/solo/new');
     await page.getByRole('button', { name: 'Calculate' }).click();
-    await expectNoA11yViolations(page, 'solo bill with errors');
+    // The only line is empty, so it is left out and there is nothing to total.
+    await expect(page.getByText('Add at least one item')).toBeVisible();
+    await expectNoA11yViolations(page, 'solo bill with no items');
+    await page.getByLabel('Item 1 price').fill('abc');
+    await page.getByRole('button', { name: 'Calculate' }).click();
+    await expect(page.getByText('Price must be between 0.01 and 1,000,000.00, with at most 2 decimal places')).toBeVisible();
+    await expectNoA11yViolations(page, 'solo bill with a price error');
     await page.getByLabel('Item 1 price').fill('10');
     await page.getByRole('button', { name: 'Calculate' }).click();
     await expect(page.getByTestId('grand-total')).toBeVisible();
@@ -168,9 +184,18 @@ for (const scheme of ['light', 'dark'] as const) {
     await page.keyboard.press('Escape');
 
     await page.goto(`/groups/${groupId}/bills/new`);
-    await page.getByText('By items (each pays for what they had)').click();
-    await page.getByRole('button', { name: /Who shared item 1/ }).click();
-    await expectNoA11yViolations(page, 'itemized bill with dropdown open');
+    await expect(page.getByRole('heading', { level: 1, name: 'Add bill to Axe' })).toBeVisible();
+    await expectNoA11yViolations(page, 'group bill split equally');
+    await page.getByRole('radio', { name: 'By items (each pays for what they had)' }).check();
+    const sharedBy = page.getByRole('group', { name: 'Who shared item 1' });
+    await sharedBy.getByRole('checkbox', { name: 'Ali' }).check();
+    await expectNoA11yViolations(page, 'itemized bill with a name chip ticked');
+    // With the message about an item nobody shared showing as well.
+    await sharedBy.getByRole('checkbox', { name: 'Ali' }).uncheck();
+    await page.getByLabel('Item 1 price').fill('10');
+    await page.getByRole('button', { name: 'Calculate' }).click();
+    await expect(page.getByText('Choose who shared this item')).toBeVisible();
+    await expectNoA11yViolations(page, 'itemized bill with an item nobody shared');
     await page.goto('/settings');
     await expect(page.getByRole('heading', { level: 1, name: 'Settings' })).toBeVisible();
     await expectNoA11yViolations(page, 'settings');
@@ -205,3 +230,23 @@ for (const scheme of ['light', 'dark'] as const) {
     await expectNoA11yViolations(page, 'invite link with errors');
   });
 }
+
+test('US-36 #6 the loading placeholder has no WCAG 2.2 AA problems and says "Loading…" to screen readers', async ({ page }, info) => {
+  await signUpFast(page, info);
+  const { groupId } = await makeGroup(page, 'Slow', '$', ['Ali']);
+  // Hold the group's data so the page stays on its placeholder.
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route(`**/api/groups/${groupId}`, async (route) => {
+    await held;
+    await route.continue();
+  });
+  await page.goto(`/groups/${groupId}`);
+  const loading = page.getByRole('status').filter({ hasText: 'Loading…' });
+  await expect(loading).toBeAttached();
+  await expect(loading).toHaveAttribute('aria-busy', 'true');
+  await expectNoA11yViolations(page, 'loading placeholder');
+  release();
+  await expect(page.getByRole('heading', { level: 1, name: 'Slow' })).toBeVisible();
+  await expect(loading).toHaveCount(0);
+});

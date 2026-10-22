@@ -103,6 +103,7 @@ export function InvitePage() {
             await reload();
           } else {
             finish(r.invite);
+            return 'leaving';
           }
         }
       } catch (err) {
@@ -127,6 +128,7 @@ export function InvitePage() {
       try {
         const r = await api.post<{ result: InviteResult }>(`${path}/accept`);
         finish(r.result);
+        return 'leaving';
       } catch (err) {
         setFormError((err as ApiError).message);
       }

@@ -665,6 +665,44 @@ test("edit group: any current member can edit it (logged under their own name), 
   }
 });
 
+// US-39 #5: "Currency: Rs" has a small info button on the group page and on a group bill form.
+const CURRENCY_NOTE = [
+  'Rs is only a symbol shown next to amounts. Nothing is converted between currencies.',
+  "Changing the group's currency in Edit group changes the symbol on every bill in this group. The numbers stay exactly the same.",
+];
+const currencyScreens: { where: string; path: (groupId: string, billId: string) => string; heading: string }[] = [
+  { where: 'the group page', path: (groupId) => `/groups/${groupId}`, heading: 'Rupees' },
+  { where: 'a new group bill', path: (groupId) => `/groups/${groupId}/bills/new`, heading: 'Add bill to Rupees' },
+  { where: 'the edit form of a saved group bill', path: (groupId, billId) => `/groups/${groupId}/bills/${billId}/edit`, heading: 'Edit Lunch' },
+];
+
+for (const { where, path, heading } of currencyScreens) {
+  test(`US-39 #5 on ${where}, "Currency: Rs" has an info button that explains the symbol and what changing it in Edit group does`, async ({ page }, info) => {
+    await signUpFast(page, info);
+    const { groupId, meId, ids } = await makeGroup(page, 'Rupees', 'Rs', ['Ali']);
+    await postEqualBill(page, groupId, [meId, ids.Ali], meId, '50.00', 'Lunch');
+    const { bills } = await api<{ bills: { id: string }[] }>(page, 'get', `/groups/${groupId}/bills`);
+    await page.goto(path(groupId, bills[0].id));
+    await expect(page.getByRole('heading', { level: 1, name: heading, exact: true })).toBeVisible();
+
+    await expect(page.getByText('Currency: Rs')).toBeVisible();
+    const infoButton = page.getByRole('button', { name: 'About the currency' });
+    await expect(infoButton).toBeVisible();
+    await expect(infoButton).toHaveAttribute('aria-expanded', 'false');
+    for (const line of CURRENCY_NOTE) await expect(page.getByText(line)).toBeHidden();
+
+    // Pressing it shows both explanations ...
+    await infoButton.click();
+    await expect(infoButton).toHaveAttribute('aria-expanded', 'true');
+    for (const line of CURRENCY_NOTE) await expect(page.getByText(line)).toBeVisible();
+
+    // ... and pressing it again puts them away.
+    await infoButton.click();
+    await expect(infoButton).toHaveAttribute('aria-expanded', 'false');
+    for (const line of CURRENCY_NOTE) await expect(page.getByText(line)).toBeHidden();
+  });
+}
+
 // ---------- 8. group page layout ----------
 
 test('group page layout: at 1280px the Balances and Suggested payments cards start at the same height', async ({ page }, info) => {
@@ -793,6 +831,104 @@ test('on a phone the invite page and the Members tab with invite controls and th
   } finally {
     await closeAll(opened);
   }
+});
+
+test('US-34 #3 on a phone 360 px wide, a group bill with long member names (on its chips, in its results, saved and being edited) does not scroll sideways', async ({ page }, info) => {
+  await signUpFast(page, info);
+  await page.setViewportSize({ width: 360, height: 780 });
+  /** The page never scrolls sideways; the message says which screen did. */
+  const fits = async (where: string) => {
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(overflow, `${where} scrolls sideways by ${overflow}px`).toBeLessThanOrEqual(0);
+  };
+  // A name with spaces to wrap at, and the longest name allowed (30 characters) with nothing to wrap at.
+  const wrapping = 'Bartholomew Maximilian Fitz';
+  const unbroken = 'W'.repeat(30);
+  const { groupId } = await makeGroup(page, 'Narrow chips', '$', [wrapping, unbroken, 'Sara']);
+  await page.goto(`/groups/${groupId}/bills/new`);
+  await expect(page.getByRole('heading', { level: 1, name: 'Add bill to Narrow chips' })).toBeVisible();
+  await fits('the new bill form');
+
+  // Split by items: every item has its own chips. An item with nobody ticked shows its message.
+  await page.getByRole('radio', { name: 'By items (each pays for what they had)' }).check();
+  await page.getByLabel('Who paid').selectOption({ label: unbroken });
+  await page.getByLabel('Bill name').fill('Long names dinner');
+  await page.getByLabel('Item 1 price').fill('30');
+  await page.getByRole('button', { name: '+ Add item' }).click();
+  await page.getByLabel('Item 2 price').fill('12');
+  const chips = (n: number) => page.getByRole('group', { name: `Who shared item ${n}`, exact: true });
+  await page.getByRole('button', { name: 'Calculate' }).click();
+  await expect(fieldError(page, 'Choose who shared this item')).toHaveCount(2);
+  await fits('the bill form with its messages');
+  await chips(1).getByRole('button', { name: 'Everyone', exact: true }).click();
+  await chips(2).getByRole('checkbox', { name: unbroken, exact: true }).check();
+  await expect(fieldError(page, 'Choose who shared this item')).toHaveCount(0);
+  await fits('the bill form with every item shared');
+
+  // The results name the payer and everyone's share.
+  await page.getByRole('button', { name: 'Calculate' }).click();
+  await expect(page.getByTestId('grand-total')).toHaveText('$42.00');
+  await expect(page.getByTestId('share')).toHaveCount(4);
+  await expect(page.getByText(`${unbroken} paid $42.00.`)).toBeVisible();
+  await fits('the bill form with its results');
+
+  // Saved: the group page, the read-only bill ("Shared by" lines, who paid), and its edit form with the saved results.
+  await page.getByRole('button', { name: 'Save bill' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Narrow chips', exact: true })).toBeVisible();
+  await fits('the group page');
+  await page.getByRole('link', { name: /Long names dinner/ }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Long names dinner' })).toBeVisible();
+  await expect(page.getByText(`Shared by ${unbroken}`)).toBeVisible();
+  await fits('the saved bill');
+  await page.getByRole('link', { name: 'Edit bill' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Edit Long names dinner' })).toBeVisible();
+  await expect(page.getByTestId('grand-total')).toHaveText('$42.00');
+  await fits('the edit form of the saved bill');
+});
+
+test('US-34 #3 on a phone 360 px wide, the longest group, bill and item names with no spaces (50, 60 and 40 characters) do not scroll the bill screens sideways', async ({ page }, info) => {
+  await signUpFast(page, info);
+  await page.setViewportSize({ width: 360, height: 780 });
+  /** The page never scrolls sideways; the message says which screen did. */
+  const fits = async (where: string) => {
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(overflow, `${where} scrolls sideways by ${overflow}px`).toBeLessThanOrEqual(0);
+  };
+  const groupName = 'G'.repeat(50);
+  const billName = 'B'.repeat(60);
+  const itemName = 'I'.repeat(40);
+  const { groupId } = await makeGroup(page, groupName, '$', ['Ali']);
+
+  // The group name is the "back" link above the title of every screen of the group.
+  await page.goto(`/groups/${groupId}/bills/new`);
+  await expect(page.getByRole('heading', { level: 1, name: `Add bill to ${groupName}` })).toBeVisible();
+  await fits('the new bill form');
+  await page.getByLabel('Bill name').fill(billName);
+  await page.getByLabel('Item 1 name').fill(itemName);
+  await page.getByLabel('Item 1 price').fill('30');
+  await page.getByRole('button', { name: 'Calculate' }).click();
+  await expect(page.getByTestId('grand-total')).toHaveText('$30.00');
+  await fits('the new bill form with its results');
+
+  // Saved: the group page, the bill (its name is the title) and its edit form (its name is the "back" link).
+  await page.getByRole('button', { name: 'Save bill' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: groupName, exact: true })).toBeVisible();
+  await fits('the group page');
+  await page.getByRole('link', { name: new RegExp(billName) }).click();
+  await expect(page.getByRole('heading', { level: 1, name: billName, exact: true })).toBeVisible();
+  await expect(page.getByText(itemName)).toBeVisible();
+  await fits('the saved bill');
+  await page.getByRole('link', { name: 'Edit bill' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: `Edit ${billName}` })).toBeVisible();
+  await fits('the edit form of the saved bill');
+
+  // The same group name on the group's other screens.
+  await page.goto(`/groups/${groupId}/edit`);
+  await expect(page.getByRole('heading', { level: 1, name: 'Edit group' })).toBeVisible();
+  await fits('Edit group');
+  await page.goto(`/groups/${groupId}/settle-ups/new`);
+  await expect(page.getByRole('heading', { level: 1, name: 'Record a payment' })).toBeVisible();
+  await fits('the payment form');
 });
 
 // ---------- a field's red message goes away as soon as that field is edited ----------

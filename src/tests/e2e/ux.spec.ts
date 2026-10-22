@@ -95,31 +95,69 @@ test('US-36 #4 usable at 200% zoom (half the width in CSS pixels)', async ({ pag
   await expect(page.getByTestId('grand-total')).toHaveText('$8.00');
 });
 
-test('US-14 #10-#12 item dropdowns list only people on the bill and follow unticking', async ({ page }, info) => {
-  await signUpFast(page, info);
+test('US-14 #10-#12 by items, the "Shared by" chips on each item are the people on the bill, "Everyone" ticks or unticks them all, and the chips follow unticking', async ({ page }, info) => {
+  const me = await signUpFast(page, info);
   const { groupId } = await makeGroup(page, 'Picky', '$', ['Ali', 'Sara', 'Omar']);
   await page.goto(`/groups/${groupId}/bills/new`);
   const took = page.getByRole('group', { name: 'Who took part' });
   await took.getByRole('checkbox', { name: 'Omar' }).uncheck();
   await page.getByRole('radio', { name: 'By items (each pays for what they had)' }).check();
-  const picker = page.getByRole('button', { name: /Who shared item 1/ });
-  await picker.click();
-  const panel = page.locator('.picker-panel');
-  await expect(panel.getByRole('checkbox')).toHaveCount(3);
-  await expect(panel.getByRole('checkbox', { name: 'Omar' })).toHaveCount(0);
-  await panel.getByRole('checkbox', { name: 'Ali' }).check();
-  await panel.getByRole('checkbox', { name: 'Sara' }).check();
-  await panel.getByRole('button', { name: 'Done' }).click();
-  await expect(picker).toContainText('Ali, Sara');
+  await page.getByRole('button', { name: '+ Add item' }).click();
+  const item1 = page.getByRole('group', { name: 'Who shared item 1' });
+  const item2 = page.getByRole('group', { name: 'Who shared item 2' });
+  const ticked = (item: Locator) => item.getByRole('checkbox', { checked: true });
 
-  // Unticking Sara from the bill takes her out of every item.
+  // #10: every item shows a chip for each of this bill's people (me, Ali and Sara, not Omar) plus
+  // "Everyone", and there is no dropdown to open: tapping a chip ticks that person.
+  for (const item of [item1, item2]) {
+    await expect(item.getByRole('checkbox')).toHaveCount(3);
+    await expect(item.getByRole('checkbox', { name: 'Omar' })).toHaveCount(0);
+    await expect(item.getByRole('checkbox', { name: me, exact: true })).toBeVisible();
+    await expect(item.getByRole('button', { name: 'Everyone' })).toBeVisible();
+  }
+  await expect(page.getByRole('button', { name: /Who shared item/ })).toHaveCount(0);
+  await expect(page.locator('.picker-panel')).toHaveCount(0);
+  await item1.getByRole('checkbox', { name: 'Ali' }).check();
+  await item1.getByRole('checkbox', { name: 'Sara' }).check();
+  await expect(ticked(item1)).toHaveCount(2);
+  await expect(item1.getByRole('checkbox', { name: me, exact: true })).not.toBeChecked();
+  // Ticking on one item leaves the other alone.
+  await expect(ticked(item2)).toHaveCount(0);
+
+  // #11: "Everyone" ticks all of the bill's people for that item; tapping it again unticks them all.
+  const everyone = item1.getByRole('button', { name: 'Everyone' });
+  await everyone.click();
+  await expect(ticked(item1)).toHaveCount(3);
+  await expect(everyone).toHaveAttribute('aria-pressed', 'true');
+  await everyone.click();
+  await expect(ticked(item1)).toHaveCount(0);
+  await expect(everyone).toHaveAttribute('aria-pressed', 'false');
+
+  // #12: unticking Sara from the bill takes her out of every item's chips.
+  await item1.getByRole('checkbox', { name: 'Ali' }).check();
+  await item1.getByRole('checkbox', { name: 'Sara' }).check();
+  await item2.getByRole('checkbox', { name: 'Sara' }).check();
   await took.getByRole('checkbox', { name: 'Sara' }).uncheck();
-  await expect(picker).toContainText('Ali');
-  await expect(picker).not.toContainText('Sara');
-  await took.getByRole('checkbox', { name: 'Ali' }).uncheck();
+  for (const item of [item1, item2]) {
+    await expect(item.getByRole('checkbox')).toHaveCount(2);
+    await expect(item.getByRole('checkbox', { name: 'Sara' })).toHaveCount(0);
+  }
+  // Ali is still on the first item; the second was only Sara's, so it is left with nobody.
+  await expect(ticked(item1)).toHaveCount(1);
+  await expect(item1.getByRole('checkbox', { name: 'Ali' })).toBeChecked();
+  await expect(ticked(item2)).toHaveCount(0);
   await page.getByLabel('Item 1 price').fill('10');
+  await page.getByLabel('Item 2 price').fill('5');
   await page.getByRole('button', { name: 'Calculate' }).click();
-  await expect(page.getByText('Choose who shared this item').last()).toBeVisible();
+  // The message sits with that item's chips, and only there.
+  await expect(page.getByText('Choose who shared this item')).toHaveCount(1);
+  await expect(item2.getByRole('checkbox').first()).toHaveAccessibleDescription('Choose who shared this item');
+  await expect(item1.getByRole('checkbox').first()).toHaveAccessibleDescription('');
+  await expect(page.getByTestId('grand-total')).toHaveCount(0);
+  // Unticking Ali too leaves both items with nobody.
+  await took.getByRole('checkbox', { name: 'Ali' }).uncheck();
+  await page.getByRole('button', { name: 'Calculate' }).click();
+  await expect(page.getByText('Choose who shared this item')).toHaveCount(2);
 });
 
 test('US-16 #8 owed is green with + and words; owes is red with − and words', async ({ page }, info) => {
@@ -158,8 +196,12 @@ test('US-33 #5/#8 latest solo bills and "owe nothing" when everything is settled
 
 // ---------- Keyboard only (US-36 #1) ----------
 
-/** Presses Tab (or Shift+Tab if it's above) until `target` has focus, proving it can be reached by keyboard. */
-async function tabTo(page: Page, target: Locator, key: string, max = 80): Promise<void> {
+/**
+ * Presses Tab (or Shift+Tab if it's above) until `target` has focus, proving it can be reached by keyboard.
+ * The focus outline is looked for on `target`, or on `outline` when the target itself is invisible (a name
+ * chip's tick box is see-through, and the chip around it draws the ring).
+ */
+async function tabTo(page: Page, target: Locator, key: string, { outline = target, max = 80 }: { outline?: Locator; max?: number } = {}): Promise<void> {
   await target.waitFor();
   const before = await target.evaluate((el) => {
     const active = document.activeElement;
@@ -170,8 +212,8 @@ async function tabTo(page: Page, target: Locator, key: string, max = 80): Promis
   for (let i = 0; i < max; i += 1) {
     if (await target.evaluate((el) => el === document.activeElement)) {
       // A visible focus outline at every step.
-      const outline = await target.evaluate((el) => getComputedStyle(el).outlineStyle);
-      expect(outline).not.toBe('none');
+      const outlineStyle = await outline.evaluate((el) => getComputedStyle(el).outlineStyle);
+      expect(outlineStyle).not.toBe('none');
       return;
     }
     await page.keyboard.press(press);
@@ -226,7 +268,7 @@ test('US-36 #1 the whole journey works with only the keyboard', async ({ page, b
   await expect(page.getByRole('button', { name: 'Copy link for Ali' }).first()).toBeVisible();
   await expect(page.getByRole('button', { name: 'Remove Ali' })).toBeVisible();
 
-  // An itemized bill, choosing people in the dropdown by keyboard.
+  // An itemized bill, choosing people on the item's name chips by keyboard.
   await tabTo(page, page.getByRole('link', { name: 'Add bill' }).first(), key);
   await page.keyboard.press('Enter');
   await headingFocused(page, /Add bill/);
@@ -235,20 +277,24 @@ test('US-36 #1 the whole journey works with only the keyboard', async ({ page, b
   await expect(page.getByRole('radio', { name: /By items/ })).toBeChecked();
   await tabTo(page, page.getByLabel('Item 1 price'), key);
   await page.keyboard.type('30');
-  await tabTo(page, page.getByRole('button', { name: /Who shared item 1/ }), key);
-  await page.keyboard.press('Enter');
-  await expect(page.locator('.picker-panel input').first()).toBeFocused();
-  await page.keyboard.press('Space');
-  await page.keyboard.press('ArrowDown');
-  await page.keyboard.press('Space');
-  await page.keyboard.press('Escape');
-  await expect(page.getByRole('button', { name: /Who shared item 1/ })).toContainText(`${username}, Ali`);
+  const sharedBy = page.getByRole('group', { name: 'Who shared item 1' });
+  for (const person of [username, 'Ali']) {
+    const chip = sharedBy.getByRole('checkbox', { name: person, exact: true });
+    // The tick box itself is see-through: the chip (its label) around it shows the focus ring.
+    const ring = sharedBy.locator('label').filter({ has: page.getByRole('checkbox', { name: person, exact: true }) });
+    await tabTo(page, chip, key, { outline: ring });
+    await page.keyboard.press('Space');
+    await expect(chip).toBeChecked();
+  }
+  await expect(sharedBy.getByRole('checkbox', { checked: true })).toHaveCount(2);
   await tabTo(page, page.getByRole('button', { name: 'Calculate' }), key);
   await page.keyboard.press('Enter');
   await expect(page.getByTestId('grand-total')).toHaveText('$30.00');
   await tabTo(page, page.getByRole('button', { name: 'Save bill' }), key);
   await page.keyboard.press('Enter');
+  // Saving goes back to the group, where the new bill is listed and marked "Saved".
   await headingFocused(page, 'Keys');
+  await expect(page.getByRole('tabpanel').getByText('Saved', { exact: true })).toBeVisible();
 
   // Record the suggested settle-up.
   await tabTo(page, page.getByRole('link', { name: 'Record this payment' }), key);

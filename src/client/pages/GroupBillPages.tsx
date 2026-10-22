@@ -1,35 +1,145 @@
-import { useMemo, useRef, useState, type FormEvent } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useId, useMemo, useRef, useState, type FormEvent } from 'react';
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import type { FieldErrors } from '../../shared/bill.js';
 import type { GroupBillDetail, GroupDetail, SettleUpDto } from '../../shared/api.js';
 import { MAX_FIELD_CENTS, centsToInput, parseHundredths } from '../../shared/money.js';
 import { MESSAGES, restoreToChange } from '../../shared/rules.js';
 import { ApiError, api } from '../api.js';
-import { calculate, emptyBill, focusFirstError, fromInput, rateLabels, revealResults, stripKeys, toGroupBillInput, type BillFormState, type CalcResult } from '../billEditor.js';
+import { calculate, emptyBill, focusFirstError, fromInput, rateLabels, revealResults, stripKeys, toFormErrors, toGroupBillInput, type BillFormState, type CalcResult } from '../billEditor.js';
 import { clearFieldError, withoutKey } from '../fieldErrors.js';
-import { useBusy, useFocusFirstError, useLoad } from '../hooks.js';
+import { useBusy, useFocusFirstError, useLoad, useShowSavedBill } from '../hooks.js';
 import { BillForm } from '../components/BillForm.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
+import { CurrencyNote } from '../components/CurrencyNote.js';
 import { Results } from '../components/Results.js';
 import { useToast } from '../components/Toasts.js';
 import { useUnsavedGuard } from '../components/UnsavedGuard.js';
-import { Alert, ErrorText, PageHeader, Skeleton, TextField, usePageTitle } from '../components/ui.js';
+import { Alert, ErrorText, PageHeader, Skeleton, TextField, niceDate, usePageTitle } from '../components/ui.js';
 
 interface Loaded {
   group: GroupDetail;
   bill: GroupBillDetail | null;
 }
 
-export function GroupBillPage() {
-  const { groupId, billId } = useParams();
-  const { data, error, loading } = useLoad<Loaded>(async () => {
+function useGroupBill(groupId: string | undefined, billId: string | undefined) {
+  return useLoad<Loaded>(async () => {
     const [g, b] = await Promise.all([
       api.get<{ group: GroupDetail }>(`/groups/${groupId}`),
       billId ? api.get<{ bill: GroupBillDetail }>(`/groups/${groupId}/bills/${billId}`) : Promise.resolve(null),
     ]);
     return { group: g.group, bill: b?.bill ?? null };
   }, [groupId, billId]);
-  usePageTitle(billId ? (data?.bill?.name ?? 'Group bill') : 'Add bill');
+}
+
+/** Members by id, with "(removed)" after anyone who has been removed. */
+function memberNames(group: GroupDetail): Map<string, string> {
+  return new Map(group.members.map((m) => [m.id, m.status === 'removed' ? `${m.name} (removed)` : m.name]));
+}
+
+/** A saved group bill, read-only: the receipt with items and each share, plus Edit and Delete. */
+export function GroupBillViewPage() {
+  const { groupId, billId } = useParams();
+  const { data, error, loading } = useGroupBill(groupId, billId);
+  usePageTitle(data?.bill?.name ?? 'Group bill');
+  if (loading) return <Skeleton lines={6} />;
+  if (error || !data?.bill) {
+    return (
+      <>
+        <PageHeader title="Group bill" back={{ to: groupId ? `/groups/${groupId}` : '/groups', label: 'Back to group' }} />
+        <Alert>{error?.message}</Alert>
+      </>
+    );
+  }
+  return <GroupBillView group={data.group} bill={data.bill} />;
+}
+
+function GroupBillView({ group, bill }: { group: GroupDetail; bill: GroupBillDetail }) {
+  const navigate = useNavigate();
+  const toast = useToast();
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [headerError, setHeaderError] = useState('');
+  const { busy, run } = useBusy();
+  const locked = bill.lockedBy;
+  const names = memberNames(group);
+  const backTo = `/groups/${group.id}`;
+  const itemized = bill.splitMode === 'itemized';
+  const people = bill.participantIds.length;
+  const items = bill.input.items.map((it, i) => ({
+    name: it.name || `Item ${i + 1}`,
+    cents: parseHundredths(it.price),
+    sharedBy: itemized ? (it.sharerIds ?? []).map((id) => names.get(id) ?? 'Someone').join(', ') : undefined,
+  }));
+
+  const onDelete = () =>
+    run(async () => {
+      setHeaderError('');
+      try {
+        await api.del(`/groups/${group.id}/bills/${bill.id}`);
+        setConfirmDelete(false);
+        toast('Bill deleted');
+        navigate(backTo, { replace: true });
+        return 'leaving';
+      } catch (err) {
+        setConfirmDelete(false);
+        setHeaderError((err as ApiError).message);
+      }
+    });
+
+  return (
+    <>
+      <PageHeader title={bill.name} back={{ to: backTo, label: group.name }}>
+        {!locked && (
+          <Link className="btn btn-primary" to={`/groups/${group.id}/bills/${bill.id}/edit`}>
+            Edit bill
+          </Link>
+        )}
+        <button
+          type="button"
+          className="btn btn-danger-outline"
+          onClick={() => (locked ? setHeaderError(restoreToChange(locked)) : setConfirmDelete(true))}
+        >
+          Delete
+        </button>
+      </PageHeader>
+      <Alert>{headerError}</Alert>
+      {locked && (
+        <Alert tone="info">
+          {locked} was removed from the group, so this bill is view only. Restore {locked} on the Members tab to change it.
+        </Alert>
+      )}
+      <p className="bill-summary">
+        {names.get(bill.payerId) ?? 'Someone'} paid on {niceDate(bill.date)}.{' '}
+        {itemized ? 'Split by items.' : `Split equally between ${people} ${people === 1 ? 'person' : 'people'}.`}
+      </p>
+      <Results
+        result={{ totals: bill.totals, shares: bill.shares }}
+        currency={group.currency}
+        names={names}
+        payerId={bill.payerId}
+        rates={rateLabels(fromInput(bill.input))}
+        title="Bill"
+        items={items}
+      />
+      <ConfirmDialog
+        open={confirmDelete}
+        title="Delete this bill?"
+        confirmLabel="Delete bill"
+        danger
+        busy={busy}
+        onConfirm={() => void onDelete()}
+        onCancel={() => setConfirmDelete(false)}
+      >
+        <p>Everyone's balances will be updated. This is recorded in the activity log.</p>
+      </ConfirmDialog>
+    </>
+  );
+}
+
+/** A new group bill, or a saved one being edited (…/bills/:billId/edit). */
+export function GroupBillPage() {
+  const { groupId, billId } = useParams();
+  const { data, error, loading } = useGroupBill(groupId, billId);
+  usePageTitle(billId ? (data?.bill ? `Edit ${data.bill.name}` : 'Edit bill') : 'Add bill');
 
   if (loading) return <Skeleton lines={6} />;
   if (error || !data) {
@@ -40,14 +150,15 @@ export function GroupBillPage() {
       </>
     );
   }
+  // A bill with a removed member can't be changed: show it read-only instead.
+  if (data.bill?.lockedBy) return <Navigate to={`/groups/${data.group.id}/bills/${data.bill.id}`} replace />;
   return <GroupBillEditor key={billId ?? 'new'} group={data.group} saved={data.bill} />;
 }
 
 function GroupBillEditor({ group, saved }: { group: GroupDetail; saved: GroupBillDetail | null }) {
-  const navigate = useNavigate();
   const toast = useToast();
+  const formId = useId();
   const current = group.members.filter((m) => m.status === 'current');
-  const locked = saved?.lockedBy ?? null;
   const initial = useMemo(
     () =>
       saved
@@ -61,22 +172,17 @@ function GroupBillEditor({ group, saved }: { group: GroupDetail; saved: GroupBil
   const [errors, setErrors] = useState<FieldErrors>({});
   const [result, setResult] = useState<CalcResult | null>(saved ? { totals: saved.totals, shares: saved.shares } : null);
   const [pageError, setPageError] = useState('');
-  // Problems with Delete show at the top, next to the button that caused them.
-  const [headerError, setHeaderError] = useState('');
-  const [confirmDelete, setConfirmDelete] = useState(false);
   const { busy, run } = useBusy();
   const formRef = useRef<HTMLFormElement>(null);
   const resultsRef = useRef<HTMLElement>(null);
   const focusErrors = useFocusFirstError(formRef);
-  const guard = useUnsavedGuard(!locked && JSON.stringify(stripKeys(state)) !== snapshot);
+  const guard = useUnsavedGuard(JSON.stringify(stripKeys(state)) !== snapshot);
+  const showSaved = useShowSavedBill();
 
-  // A view-only bill shows everyone on it, including removed members.
-  const formMembers = (locked ? group.members : current).map((m) => ({
-    id: m.id,
-    name: m.status === 'removed' ? `${m.name} (removed)` : m.name,
-  }));
-  const names = new Map(group.members.map((m) => [m.id, m.status === 'removed' ? `${m.name} (removed)` : m.name]));
+  const formMembers = current.map((m) => ({ id: m.id, name: m.name }));
+  const names = memberNames(group);
   const backTo = `/groups/${group.id}`;
+  const viewPath = saved ? `/groups/${group.id}/bills/${saved.id}` : backTo;
 
   const change = (next: BillFormState) => {
     setState(next);
@@ -99,10 +205,6 @@ function GroupBillEditor({ group, saved }: { group: GroupDetail; saved: GroupBil
   const onSave = () =>
     run(async () => {
       setPageError('');
-      if (locked) {
-        setPageError(restoreToChange(locked));
-        return;
-      }
       const outcome = calculate(state, 'group', false);
       if (!outcome.ok) {
         setErrors(outcome.errors);
@@ -112,107 +214,78 @@ function GroupBillEditor({ group, saved }: { group: GroupDetail; saved: GroupBil
       setErrors({});
       try {
         const body = { bill: toGroupBillInput(state) };
-        if (saved) await api.put(`/groups/${group.id}/bills/${saved.id}`, body);
-        else await api.post(`/groups/${group.id}/bills`, body);
+        let billId: string;
+        if (saved) {
+          await api.put(`/groups/${group.id}/bills/${saved.id}`, body);
+          billId = saved.id;
+        } else {
+          billId = (await api.post<{ billId: string }>(`/groups/${group.id}/bills`, body)).billId;
+        }
         toast('Bill saved');
         guard.allowLeave();
-        navigate(backTo);
+        // Back to the group's bill list, with this bill marked as just saved.
+        showSaved(backTo, billId);
+        return 'leaving';
       } catch (err) {
         const e = err as ApiError;
-        setErrors(e.fields);
+        setErrors(toFormErrors(state, e.fields));
         setPageError(e.message);
         if (Object.keys(e.fields).length) focusErrors();
       }
     });
 
-  const onDelete = () =>
-    run(async () => {
-      if (!saved) return;
-      setHeaderError('');
-      try {
-        await api.del(`/groups/${group.id}/bills/${saved.id}`);
-        setConfirmDelete(false);
-        toast('Bill deleted');
-        guard.allowLeave();
-        navigate(backTo);
-      } catch (err) {
-        setConfirmDelete(false);
-        setHeaderError((err as ApiError).message);
-      }
-    });
-
   return (
     <>
-      <PageHeader title={saved ? saved.name : `Add bill to ${group.name}`} back={{ to: backTo, label: group.name }}>
+      <PageHeader title={saved ? `Edit ${saved.name}` : `Add bill to ${group.name}`} back={{ to: viewPath, label: saved ? saved.name : group.name }}>
         {saved && (
-          <button
-            type="button"
-            className="btn btn-danger-outline"
-            onClick={() => (locked ? setHeaderError(restoreToChange(locked)) : setConfirmDelete(true))}
-          >
-            Delete
-          </button>
+          <Link className="btn btn-secondary" to={viewPath}>
+            Cancel
+          </Link>
         )}
       </PageHeader>
-      <Alert>{headerError}</Alert>
-      {locked && (
-        <Alert tone="info">
-          {locked} was removed from the group, so this bill is view only. Restore {locked} on the Members tab to change it.
-        </Alert>
-      )}
-      <form
-        ref={formRef}
-        className="card stack"
-        noValidate
-        onSubmit={(e) => {
-          e.preventDefault();
-          onCalculate();
-        }}
-      >
-        <p className="muted">Currency: {group.currency}</p>
-        <BillForm
-          kind="group"
-          state={state}
-          onChange={change}
-          errors={errors}
-          members={formMembers}
-          readOnly={!!locked}
-          onFieldEdit={(key) => setErrors((e) => clearFieldError(e, key))}
-        />
-        {!locked && (
-          <div className="form-actions">
-            <button type="submit" className="btn btn-primary">
-              Calculate
+      <CurrencyNote currency={group.currency} className="page-meta" />
+      <div className="bill-layout">
+        <form
+          id={formId}
+          ref={formRef}
+          className="card stack bill-card"
+          noValidate
+          onSubmit={(e) => {
+            e.preventDefault();
+            onCalculate();
+          }}
+        >
+          <BillForm
+            kind="group"
+            state={state}
+            onChange={change}
+            errors={errors}
+            currency={group.currency}
+            members={formMembers}
+            onFieldEdit={(key) => setErrors((e) => clearFieldError(e, key))}
+          />
+        </form>
+        <div className="bill-side">
+          <button type="submit" form={formId} className="btn btn-secondary btn-wide">
+            Calculate
+          </button>
+          <Results
+            ref={resultsRef}
+            result={result}
+            currency={group.currency}
+            names={names}
+            payerId={result ? state.payerId : null}
+            rates={rateLabels(state)}
+          />
+          <div className="save-bar">
+            <Alert>{pageError}</Alert>
+            <button type="button" className="btn btn-primary btn-wide" onClick={() => void onSave()} disabled={busy}>
+              {busy ? 'Saving…' : 'Save bill'}
             </button>
           </div>
-        )}
-      </form>
-      <Results
-        ref={resultsRef}
-        result={result}
-        currency={group.currency}
-        names={names}
-        payerId={result ? state.payerId : null}
-        rates={rateLabels(state)}
-      />
-      <div className="save-bar">
-        <Alert>{pageError}</Alert>
-        <button type="button" className="btn btn-primary" onClick={() => void onSave()} disabled={busy}>
-          {busy ? 'Saving…' : 'Save bill'}
-        </button>
+        </div>
       </div>
       {guard.dialog}
-      <ConfirmDialog
-        open={confirmDelete}
-        title="Delete this bill?"
-        confirmLabel="Delete bill"
-        danger
-        busy={busy}
-        onConfirm={() => void onDelete()}
-        onCancel={() => setConfirmDelete(false)}
-      >
-        <p>Everyone's balances will be updated. This is recorded in the activity log.</p>
-      </ConfirmDialog>
     </>
   );
 }
@@ -283,6 +356,7 @@ function SettleUpEditor({ group, saved }: { group: GroupDetail; saved: SettleUpD
         else await api.post(`/groups/${group.id}/settle-ups`, body);
         toast('Payment recorded');
         navigate(backTo);
+        return 'leaving';
       } catch (err) {
         const apiErr = err as ApiError;
         setErrors(apiErr.fields);
@@ -299,6 +373,7 @@ function SettleUpEditor({ group, saved }: { group: GroupDetail; saved: SettleUpD
         setConfirmDelete(false);
         toast('Payment deleted');
         navigate(backTo);
+        return 'leaving';
       } catch (err) {
         setConfirmDelete(false);
         setPageError((err as ApiError).message);

@@ -159,15 +159,17 @@ test('US-20 #4 an old bill shows "Omar (removed)" as payer and participant, with
   await page.goto(`/groups/${groupId}/bills/${pizzaId}`);
   await expect(page.getByRole('heading', { level: 1, name: 'Pizza night' })).toBeVisible();
   await expect(page.getByText('so this bill is view only')).toBeVisible();
-  // Participant: ticked in "Who took part".
-  const took = page.getByRole('group', { name: 'Who took part' });
-  await expect(took.getByRole('checkbox', { name: 'Omar (removed)' })).toBeChecked();
-  // Payer: chosen in "Who paid".
-  const paid = page.getByLabel('Who paid', { exact: true });
-  await expect(paid).toHaveValue(ids.Omar);
-  await expect(paid.locator('option:checked')).toHaveText('Omar (removed)');
-  await expect(page.getByText('Omar (removed) paid $20.00.')).toBeVisible();
-  await expect(page.getByTestId('share').filter({ hasText: 'Omar (removed)' })).toContainText('$10.00');
+  // A saved bill is a read-only receipt: nothing to tick or choose, so the names are read off the receipt.
+  await expect(page.getByRole('checkbox')).toHaveCount(0);
+  await expect(page.getByLabel('Who paid', { exact: true })).toHaveCount(0);
+  // Payer: the summary sentence and the receipt's "paid" line both name him.
+  await expect(page.getByText(/^Omar \(removed\) paid on \d{1,2} [A-Z][a-z]{2} \d{4}\. Split equally between 2 people\.$/)).toBeVisible();
+  const receipt = page.getByRole('region', { name: 'Bill', exact: true });
+  await expect(receipt.getByText('Omar (removed) paid $20.00.')).toBeVisible();
+  // Participant: one of the two shares on the receipt, with his $10.00.
+  await expect(receipt.getByTestId('share')).toHaveCount(2);
+  await expect(receipt.getByTestId('share').filter({ hasText: 'Omar (removed)' })).toContainText('$10.00');
+  await expect(receipt.getByTestId('share').filter({ hasText: 'Omar (removed)' })).toHaveCount(1);
   // The totals are exactly as before.
   await expect(page.getByTestId('grand-total')).toHaveText(totalBefore!);
 
@@ -270,8 +272,13 @@ test('US-21 #1-#4 a member with a balance must settle first; at 0.00 they leave 
     // #3: old bills keep him as "Name (removed)" and every total and balance is the same.
     await owner.goto(`/groups/${groupId}/bills/${dinnerId}`);
     await expect(owner.getByRole('heading', { level: 1, name: 'Dinner' })).toBeVisible();
-    await expect(owner.getByRole('group', { name: 'Who took part' }).getByRole('checkbox', { name: 'Omar (removed)' })).toBeChecked();
-    await expect(owner.getByTestId('share').filter({ hasText: 'Omar (removed)' })).toContainText('$10.00');
+    // The saved bill is a read-only receipt: he is still one of the three shares, as "Omar (removed)".
+    const receipt = owner.getByRole('region', { name: 'Bill', exact: true });
+    await expect(owner.getByText(/Split equally between 3 people\.$/)).toBeVisible();
+    await expect(receipt.getByTestId('share')).toHaveCount(3);
+    await expect(receipt.getByTestId('share').filter({ hasText: 'Omar (removed)' })).toHaveCount(1);
+    await expect(receipt.getByTestId('share').filter({ hasText: 'Omar (removed)' })).toContainText('$10.00');
+    await expect(receipt.getByTestId('share').filter({ hasText: 'Sara' })).toContainText('$10.00');
     await expect(owner.getByTestId('grand-total')).toHaveText('$30.00');
     await owner.goto(`/groups/${groupId}`);
     await expect(owner.getByRole('heading', { level: 1, name: 'Leavers' })).toBeVisible();
@@ -440,14 +447,15 @@ test('US-33 #7 a brand-new account sees what to do next in both Dashboard sectio
 const TARGETS = 'button, a[href], select, input[type="checkbox"], input[type="radio"]';
 
 /**
- * Every visible button, link, select and tick box inside `scope` is at least 24x24 px.
+ * Every visible control matched by `targets` is at least 24x24 px, and at least `minimum` of them
+ * were really measured (so a control that moved or went missing can't pass by not being looked at).
  * A tick box or radio sits inside its <label>, which is part of the clickable area, so the
  * label's box counts for it.
  */
-async function expectBigTargets(scope: Locator, label: string): Promise<void> {
+async function expectTargetsBigEnough(targets: Locator, label: string, minimum = 1): Promise<void> {
   const tooSmall: string[] = [];
   let checked = 0;
-  for (const el of await scope.locator(TARGETS).all()) {
+  for (const el of await targets.all()) {
     if (!(await el.isVisible())) continue;
     let box = await el.boundingBox();
     const isInput = await el.evaluate((n) => n instanceof HTMLInputElement);
@@ -462,9 +470,12 @@ async function expectBigTargets(scope: Locator, label: string): Promise<void> {
       tooSmall.push(`${what} is ${box ? `${box.width.toFixed(1)}x${box.height.toFixed(1)}` : 'not measurable'}`);
     }
   }
-  expect(checked, `${label}: found something to measure`).toBeGreaterThan(0);
+  expect(checked, `${label}: found at least ${minimum} to measure`).toBeGreaterThanOrEqual(minimum);
   expect(tooSmall, `${label}: targets under 24x24 px`).toEqual([]);
 }
+
+/** Every visible button, link, select and tick box inside `scope` is at least 24x24 px. */
+const expectBigTargets = (scope: Locator, label: string) => expectTargetsBigEnough(scope.locator(TARGETS), label);
 
 /** axe's own target-size rule (WCAG 2.5.8), which exempts links inside a sentence. */
 async function expectTargetSizeRulePasses(page: Page, label: string): Promise<void> {
@@ -482,33 +493,57 @@ test('US-36 #5 every button, link and tick box on the bill form, group page and 
   const { bills } = await api<{ bills: { id: string }[] }>(page, 'get', `/groups/${groupId}/bills`);
   const body = page.locator('body');
 
-  // Bill form, equal split.
+  // Bill form, equal split: the name chips, "Everyone", the "Remove item N" buttons, the % / currency
+  // switch segments and the currency info button, each measured by name (and then the whole page).
   await page.goto(`/groups/${groupId}/bills/new`);
   await expect(page.getByRole('heading', { level: 1, name: 'Add bill to Targets' })).toBeVisible();
-  await page.getByRole('radio', { name: 'Percentage' }).last().check(); // a % tip shows the "Tip is a % of" options
-  await expect(page.getByRole('radio', { name: 'Items + tax' })).toBeVisible();
+  await page.getByRole('button', { name: '+ Add item' }).click(); // two rows, so two remove buttons
+  await expect(page.getByRole('radio', { name: 'Items + tax' })).toBeVisible(); // a % tip shows the "Tip is a % of" options
+  const took = page.getByRole('group', { name: 'Who took part' });
+  await expectTargetsBigEnough(took.getByRole('checkbox'), 'name chips under "Who took part"', 3);
+  await expectTargetsBigEnough(took.getByRole('button', { name: 'Everyone' }), '"Everyone" under "Who took part"');
+  await expectTargetsBigEnough(page.getByRole('button', { name: /^Remove item \d+$/ }), 'the "Remove item N" buttons', 2);
+  await expectTargetsBigEnough(
+    page.getByRole('radiogroup', { name: /^(Tax|Other charges|Tip) as$/ }).getByRole('radio'),
+    'the % / currency switch segments',
+    6,
+  );
+  await expectTargetsBigEnough(page.getByRole('group', { name: 'Tip is a % of' }).getByRole('radio'), 'the "Tip is a % of" options', 2);
+  await expectTargetsBigEnough(page.getByRole('radio', { name: /^(Equally|By items)/ }), 'the "How to split" switch', 2);
+  await expectTargetsBigEnough(page.getByRole('button', { name: 'About the currency' }), 'the "About the currency" info button');
   await expectBigTargets(body, 'bill form (equal split)');
   await expectTargetSizeRulePasses(page, 'bill form (equal split)');
 
-  // Bill form, by items, with the people dropdown open and a result showing.
+  // Bill form, by items: each item has its own name chips and "Everyone" (no dropdown to open).
   await page.getByRole('radio', { name: /By items/ }).check();
   await page.getByLabel('Item 1 price').fill('10');
-  await page.getByRole('button', { name: /Who shared item 1/ }).click();
-  await expect(page.locator('.picker-panel')).toBeVisible();
-  await expectBigTargets(body, 'bill form (by items, dropdown open)');
-  await expectTargetSizeRulePasses(page, 'bill form (by items, dropdown open)');
-  await page.locator('.picker-panel').getByRole('button', { name: 'Done' }).click();
+  const shared = page.getByRole('group', { name: 'Who shared item 1' });
+  await expectTargetsBigEnough(shared.getByRole('checkbox'), 'name chips under "Who shared item 1"', 3);
+  await expectTargetsBigEnough(shared.getByRole('button', { name: 'Everyone' }), '"Everyone" under "Who shared item 1"');
+  await shared.getByRole('button', { name: 'Everyone' }).click();
+  await expect(shared.getByRole('checkbox', { name: 'Ali' })).toBeChecked();
+  await expectBigTargets(body, 'bill form (by items, item shared by everyone)');
+  await expectTargetSizeRulePasses(page, 'bill form (by items, item shared by everyone)');
 
-  // Saved bill page (with its Delete button) and the delete dialog.
+  // Saved bill: a read-only receipt with its "Edit bill" link and Delete button, and the delete dialog.
   await page.goto(`/groups/${groupId}/bills/${bills[0].id}`);
   await expect(page.getByRole('heading', { level: 1, name: 'Lunch' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Edit bill' })).toBeVisible();
   await expectBigTargets(body, 'saved bill');
+  await expectTargetSizeRulePasses(page, 'saved bill');
   await page.getByRole('button', { name: 'Delete' }).click();
   const deleteDialog = page.getByRole('dialog', { name: 'Delete this bill?' });
   await expect(deleteDialog).toBeVisible();
   await expectBigTargets(deleteDialog, 'delete bill dialog');
   await expectTargetSizeRulePasses(page, 'delete bill dialog');
   await page.keyboard.press('Escape');
+
+  // The same bill being edited, with its Cancel link.
+  await page.goto(`/groups/${groupId}/bills/${bills[0].id}/edit`);
+  await expect(page.getByRole('heading', { level: 1, name: 'Edit Lunch' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Cancel' })).toBeVisible();
+  await expectBigTargets(body, 'bill edit page');
+  await expectTargetSizeRulePasses(page, 'bill edit page');
 
   // Settle-up form.
   await page.goto(`/groups/${groupId}/settle-ups/new`);
@@ -526,9 +561,18 @@ test('US-36 #5 every button, link and tick box on the bill form, group page and 
     await page.goto(`/groups/${groupId}?tab=${tab}`);
     await expect(page.getByRole('heading', { level: 1, name: 'Targets' })).toBeVisible();
     await expect(page.getByRole('tabpanel').getByText(readyText).first()).toBeVisible();
+    await expectTargetsBigEnough(page.getByRole('button', { name: 'About the currency' }), `the "About the currency" info button, ${tab} tab`);
     await expectBigTargets(body, `group page, ${tab} tab`);
     await expectTargetSizeRulePasses(page, `group page, ${tab} tab`);
   }
+
+  // The currency info button opened: the note it shows has no small targets either.
+  await page.goto(`/groups/${groupId}`);
+  await expect(page.getByRole('heading', { level: 1, name: 'Targets' })).toBeVisible();
+  await page.getByRole('button', { name: 'About the currency' }).click();
+  await expect(page.getByRole('button', { name: 'About the currency' })).toHaveAttribute('aria-expanded', 'true');
+  await expectBigTargets(body, 'group page, currency note open');
+  await expectTargetSizeRulePasses(page, 'group page, currency note open');
 
   // Members tab dialogs and the removed-members list.
   await page.goto(`/groups/${groupId}?tab=members`);
@@ -564,7 +608,19 @@ test('US-36 #5 every button, link and tick box on the bill form, group page and 
     await expectTargetSizeRulePasses(page, heading);
   }
 
+  // Solo bill form: the currency picker, the % / currency switch segments and "Remove item 1".
   await page.goto('/solo/new');
+  await expect(page.getByRole('heading', { level: 1, name: 'New solo bill' })).toBeVisible();
+  await expectTargetsBigEnough(page.getByLabel('Currency', { exact: true }), 'the currency picker (solo)');
+  await expectTargetsBigEnough(page.getByRole('button', { name: 'Remove item 1' }), '"Remove item 1" (solo)');
+  await expectTargetsBigEnough(
+    page.getByRole('radiogroup', { name: /^(Tax|Other charges|Tip) as$/ }).getByRole('radio'),
+    'the % / currency switch segments (solo)',
+    6,
+  );
+  await expectBigTargets(body, 'solo bill form');
+  await expectTargetSizeRulePasses(page, 'solo bill form');
+
   await page.getByLabel('Item 1 price').fill('5');
   await page.getByRole('link', { name: 'Groups' }).first().click();
   const unsaved = page.getByRole('dialog', { name: 'You have unsaved changes. Leave without saving?' });
@@ -751,7 +807,7 @@ test('US-37 #2 while a solo bill is being saved the button reads "Saving…" and
   await page.route('**/api/solo-bills', async (route) => {
     if (route.request().method() !== 'POST') return route.continue();
     posts += 1;
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await new Promise((resolve) => setTimeout(resolve, 2500)); // long enough for a slow machine to see "Saving…"
     return route.continue();
   });
   await page.goto('/solo/new');
@@ -763,13 +819,20 @@ test('US-37 #2 while a solo bill is being saved the button reads "Saving…" and
   const saving = page.getByRole('button', { name: 'Saving…' });
   await expect(saving).toBeVisible();
   await expect(saving).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Save bill' })).toHaveCount(0);
   await page.waitForTimeout(700); // still held
   await expect(saving).toBeDisabled();
+  await expect(page).toHaveURL(/\/solo\/new$/); // nothing has moved on while the save is running
+  // A second press while it saves does nothing (force: skip Playwright's own "is it enabled" wait).
+  await saving.click({ force: true });
   expect(posts).toBe(1);
 
+  // Once the save finishes the app leaves the form for the history: no "Saving…" button is left anywhere.
+  await expect(page.getByRole('heading', { level: 1, name: 'Solo bills' })).toBeVisible();
+  await expect(page).toHaveURL(/\/solo$/);
   await expect(page.getByRole('status').getByText('Bill saved')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Saving…' })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Save bill' })).toBeEnabled();
+  await expect(page.getByRole('link', { name: /Held bill/ })).toHaveCount(1);
   expect(posts).toBe(1);
   const { bills } = await api<{ bills: { name: string }[] }>(page, 'get', '/solo-bills');
   expect(bills.map((b) => b.name)).toEqual(['Held bill']);
@@ -875,7 +938,13 @@ test('US-38 #5 right after a successful Save of a new solo bill, leaving shows n
   await startDirtySoloBill(page);
   await page.getByRole('button', { name: 'Save bill' }).click();
   await expect(page.getByRole('status').getByText('Bill saved')).toBeVisible();
-  await expect(page).toHaveURL(/\/solo\/\d+$/);
+  // Saving takes me to the history, not to the bill, and no question stops me.
+  await expect(page).toHaveURL(/\/solo$/);
+  await expect(page.getByRole('heading', { level: 1, name: 'Solo bills' })).toBeVisible();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  const saved = page.getByRole('link', { name: /Bill – / });
+  await expect(saved).toHaveCount(1);
+  await expect(saved.getByText('Saved', { exact: true })).toBeVisible();
 
   await page.getByRole('link', { name: 'Groups' }).first().click();
   await expect(page.getByRole('heading', { level: 1, name: 'Groups' })).toBeVisible();
@@ -887,25 +956,34 @@ test('US-38 #5 right after a successful Save of an edited solo bill, leaving sho
   await startDirtySoloBill(page);
   await page.getByRole('button', { name: 'Save bill' }).click();
   await expect(page.getByRole('status').getByText('Bill saved')).toBeVisible();
+  await expect(page).toHaveURL(/\/solo$/);
+
+  // Open the saved bill (a read-only receipt) and press "Edit bill".
+  await page.getByRole('link', { name: /Bill – / }).click();
   await expect(page).toHaveURL(/\/solo\/\d+$/);
+  await page.getByRole('link', { name: 'Edit bill' }).click();
+  await expect(page).toHaveURL(/\/solo\/\d+\/edit$/);
 
   // Edit the saved bill: leaving now would warn...
   const price = page.getByLabel('Item 1 price');
   await expect(price).toHaveValue('42.00');
   await price.fill('50');
-  await page.getByRole('link', { name: '← Solo bills' }).click();
+  await page.getByRole('link', { name: 'Cancel' }).click();
   const dialog = page.getByRole('dialog', { name: UNSAVED });
   await expect(dialog).toBeVisible();
+  await expect(page).toHaveURL(/\/solo\/\d+\/edit$/);
   await dialog.getByRole('button', { name: 'Stay' }).click();
-  // ...but right after saving the edit it does not.
-  const edited = page.waitForResponse((res) => res.request().method() === 'PUT' && /\/api\/solo-bills\/\d+$/.test(res.url()));
+  await expect(dialog).toBeHidden();
+  await expect(price).toHaveValue('50');
+  // ...but right after saving the edit it does not: the app goes to the history with the bill marked "Saved".
   await page.getByRole('button', { name: 'Save bill' }).click();
-  await edited;
-  // The first save's "Bill saved" message can still be on screen, so wait for the button to read "Save bill" again: the save is finished.
-  await expect(page.getByRole('button', { name: 'Save bill' })).toBeEnabled();
-  await expect(page.getByRole('status').getByText('Bill saved').last()).toBeVisible();
-  await page.getByRole('link', { name: '← Solo bills' }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'Solo bills' })).toBeVisible();
+  await expect(page).toHaveURL(/\/solo$/);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByRole('link', { name: /Bill – / }).getByText('Saved', { exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: /Bill – / })).toContainText('$50.00');
+  await page.getByRole('link', { name: 'Groups' }).first().click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Groups' })).toBeVisible();
   await expect(page.getByRole('dialog')).toHaveCount(0);
 });
 

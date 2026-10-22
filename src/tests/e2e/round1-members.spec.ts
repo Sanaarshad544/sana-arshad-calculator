@@ -2,7 +2,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import { PASSWORD, api, makeGroup, signUpFast, uniqueName } from './helpers.js';
 
 // QA round 1 additions about members and groups: the Dashboard's "who" lists (US-33 #9),
-// removed members and invites (US-23 #7, US-12 #7), and two group bill form changes (US-26 #9, #11).
+// removed members and invites (US-23 #7, US-12 #7), and the group bill form's layout and messages (US-26 #5, #9, #11).
 
 // ---------- Local helpers ----------
 
@@ -262,6 +262,129 @@ async function gapBelow(lower: Locator, upper: Locator): Promise<number> {
   }
 }
 
+/** Edges of an element measured from the top left of the page, so scrolling never changes them. */
+async function pageBox(target: Locator): Promise<{ left: number; right: number; top: number; bottom: number }> {
+  return target.evaluate((el) => {
+    const box = el.getBoundingClientRect();
+    return { left: box.left + window.scrollX, right: box.right + window.scrollX, top: box.top + window.scrollY, bottom: box.bottom + window.scrollY };
+  });
+}
+
+test('US-26 #5 on a group bill, Calculate, the results area and "Save bill" sit beside the form on a computer and under the form on a phone', async ({ page }, info) => {
+  await signUpFast(page, info);
+  const { groupId } = await makeGroup(page, 'Side column', '$', ['Ali']);
+  const form = page.locator('form').filter({ has: page.getByLabel('Bill name') });
+  const calculate = page.getByRole('button', { name: 'Calculate' });
+  const results = page.getByRole('region', { name: 'Results' });
+  const save = page.getByRole('button', { name: 'Save bill' });
+  const measure = async () => ({ form: await pageBox(form), calculate: await pageBox(calculate), results: await pageBox(results), save: await pageBox(save) });
+
+  // A computer: the three sit in a column to the right of the form, starting level with it, in this order.
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(`/groups/${groupId}/bills/new`);
+  await expect(page.getByRole('heading', { level: 1, name: 'Add bill to Side column' })).toBeVisible();
+  await expect(results).toContainText('Press Calculate to see results');
+  const wide = await measure();
+  for (const part of [wide.calculate, wide.results, wide.save]) expect(part.left, 'beside the form').toBeGreaterThanOrEqual(wide.form.right);
+  expect(wide.calculate.top, 'starts level with the form').toBeLessThan(wide.form.bottom);
+  expect(wide.results.top, 'results under Calculate').toBeGreaterThanOrEqual(wide.calculate.bottom);
+  expect(wide.save.top, 'Save under the results').toBeGreaterThanOrEqual(wide.results.bottom);
+
+  // A phone: the same three, in the same order, but under the form.
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expect(results).toBeVisible();
+  const narrow = await measure();
+  expect(narrow.calculate.top, 'Calculate under the form').toBeGreaterThanOrEqual(narrow.form.bottom);
+  expect(narrow.results.top, 'results under Calculate').toBeGreaterThanOrEqual(narrow.calculate.bottom);
+  expect(narrow.save.top, 'Save under the results').toBeGreaterThanOrEqual(narrow.results.bottom);
+  for (const part of [narrow.calculate, narrow.results, narrow.save]) expect(part.left, 'not beside the form').toBeLessThan(narrow.form.right);
+});
+
+test('US-26 #6 on a group bill at 375 px wide, Calculate fills the results area and brings it into view', async ({ page }, info) => {
+  await signUpFast(page, info);
+  await page.setViewportSize({ width: 375, height: 812 });
+  const { groupId } = await makeGroup(page, 'Long form', '$', ['Ali', 'Sara', 'Omar']);
+  await page.goto(`/groups/${groupId}/bills/new`);
+  await expect(page.getByRole('heading', { level: 1, name: 'Add bill to Long form' })).toBeVisible();
+  // Eight items make the form taller than the screen.
+  for (let n = 1; n <= 8; n += 1) {
+    if (n > 1) await page.getByRole('button', { name: '+ Add item' }).click();
+    await page.getByLabel(`Item ${n} price`).fill(String(n * 5));
+  }
+  const results = page.getByRole('region', { name: 'Results' });
+  // Back at the top, the results area is off screen.
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await expect(results).not.toBeInViewport();
+  // Enter in the bill name is Calculate; it avoids Playwright scrolling the Calculate button into view for us.
+  await page.getByLabel('Bill name').focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('grand-total')).toHaveText('$180.00');
+  await expect(page.getByTestId('share')).toHaveCount(4);
+  await expect(results.getByRole('heading', { name: 'Results' })).toBeInViewport();
+  await expect(page.getByTestId('grand-total')).toBeInViewport();
+  // The cursor is in the results, so a screen reader reads them out.
+  await expect(results).toBeFocused();
+});
+
+test('US-26 #7 on a group bill, changing who took part, who paid, how to split or who shared an item sends the results area back to "Press Calculate to see results"', async ({ page }, info) => {
+  await signUpFast(page, info);
+  const { groupId } = await makeGroup(page, 'Stale results', '$', ['Ali', 'Sara']);
+  await page.goto(`/groups/${groupId}/bills/new`);
+  await expect(page.getByRole('heading', { level: 1, name: 'Add bill to Stale results' })).toBeVisible();
+
+  const took = page.getByRole('group', { name: 'Who took part' });
+  const shared = page.getByRole('group', { name: 'Who shared item 1', exact: true });
+  const press = () => page.getByRole('button', { name: 'Calculate' }).click();
+  /** The results are showing the figures for the bill as it is now. */
+  const showing = async () => {
+    await expect(page.getByTestId('grand-total')).toHaveText('$30.00');
+    await expect(page.getByText('Press Calculate to see results')).toHaveCount(0);
+  };
+  /** The old figures are gone and the area asks for Calculate again. */
+  const gone = async () => {
+    await expect(page.getByText('Press Calculate to see results')).toBeVisible();
+    await expect(page.getByTestId('grand-total')).toHaveCount(0);
+    await expect(page.getByTestId('share')).toHaveCount(0);
+  };
+
+  await page.getByLabel('Item 1 price').fill('30');
+  await press();
+  await showing();
+  await expect(page.getByTestId('share')).toHaveCount(3);
+
+  // Who took part: unticking a chip, and the "Everyone" button.
+  await took.getByRole('checkbox', { name: 'Sara', exact: true }).uncheck();
+  await gone();
+  await press();
+  await showing();
+  await expect(page.getByTestId('share')).toHaveCount(2);
+  await took.getByRole('button', { name: 'Everyone', exact: true }).click();
+  await gone();
+  await press();
+  await showing();
+  await expect(page.getByTestId('share')).toHaveCount(3);
+
+  // Who paid.
+  await page.getByLabel('Who paid').selectOption({ label: 'Ali' });
+  await gone();
+  await press();
+  await showing();
+  await expect(page.getByText('Ali paid $30.00.')).toBeVisible();
+
+  // How to split, then who shared the item: a chip and the item's "Everyone" button.
+  await page.getByRole('radio', { name: 'By items (each pays for what they had)' }).check();
+  await gone();
+  await shared.getByRole('button', { name: 'Everyone', exact: true }).click();
+  await press();
+  await showing();
+  await shared.getByRole('checkbox', { name: 'Sara', exact: true }).uncheck();
+  await gone();
+  await press();
+  await showing();
+  await shared.getByRole('button', { name: 'Everyone', exact: true }).click();
+  await gone();
+});
+
 test('US-26 #11 on a group bill, "Save bill" sits under the results (before and after Calculate, on a computer and a phone), and saving still works', async ({ page }, info) => {
   await signUpFast(page, info);
   const { groupId } = await makeGroup(page, 'Save below', '$', ['Ali']);
@@ -304,9 +427,9 @@ test('US-26 #11 on a group bill, "Save bill" sits under the results (before and 
 
 // ---------- US-26 #9 an error goes as soon as its field is edited ----------
 
-const sharerPicker = (page: Page, n: number) => page.getByRole('button', { name: new RegExp(`^Who shared item ${n}:`) });
+const sharedBy = (page: Page, n: number) => page.getByRole('group', { name: `Who shared item ${n}`, exact: true });
 
-test(`US-26 #9 on a group bill, "Choose who shared this item" goes as soon as someone is ticked in that item's dropdown, before Calculate`, async ({ page }, info) => {
+test(`US-26 #9 on a group bill, "Choose who shared this item" goes as soon as someone is ticked for that item, before Calculate`, async ({ page }, info) => {
   await signUpFast(page, info);
   const { groupId } = await makeGroup(page, 'Sharers', '$', ['Ali', 'Sara']);
   await page.goto(`/groups/${groupId}/bills/new`);
@@ -315,37 +438,42 @@ test(`US-26 #9 on a group bill, "Choose who shared this item" goes as soon as so
   await page.getByLabel('Item 1 price').fill('10');
   await page.getByRole('button', { name: '+ Add item' }).click();
   await page.getByLabel('Item 2 price').fill('6');
+  const ali = (n: number) => sharedBy(page, n).getByRole('checkbox', { name: 'Ali', exact: true });
+  const sara = (n: number) => sharedBy(page, n).getByRole('checkbox', { name: 'Sara', exact: true });
 
-  // Nobody ticked on either item: Calculate shows one error per item and no result.
+  // Nobody ticked on either item: Calculate shows one error per item (under its chips) and no result.
   await page.getByRole('button', { name: 'Calculate' }).click();
   const errors = page.getByText('Choose who shared this item', { exact: true });
   await expect(errors).toHaveCount(2);
-  await expect(sharerPicker(page, 1)).toHaveAccessibleDescription('Choose who shared this item');
-  await expect(sharerPicker(page, 2)).toHaveAccessibleDescription('Choose who shared this item');
+  for (const n of [1, 2]) {
+    await expect(sharedBy(page, n).getByText('Choose who shared this item', { exact: true })).toBeVisible();
+    for (const box of [ali(n), sara(n)]) {
+      await expect(box).toHaveAccessibleDescription('Choose who shared this item');
+      await expect(box).toHaveAttribute('aria-invalid', 'true');
+    }
+  }
   await expect(page.getByText('Press Calculate to see results')).toBeVisible();
 
   // Editing some other field leaves both errors alone.
   await page.getByLabel('Bill name').fill('Dinner');
   await expect(errors).toHaveCount(2);
 
-  // Ticking Ali on item 1 clears item 1's error at once (its dropdown is still open): item 2's stays.
-  await sharerPicker(page, 1).click();
-  const panel = page.locator('.picker-panel');
-  await panel.getByRole('checkbox', { name: 'Ali', exact: true }).check();
+  // Ticking Ali on item 1 clears item 1's error at once: item 2's stays.
+  await ali(1).check();
   await expect(errors).toHaveCount(1);
-  await expect(sharerPicker(page, 1)).toHaveAccessibleDescription('');
-  await expect(sharerPicker(page, 1)).not.toHaveAttribute('aria-invalid', 'true');
-  await expect(sharerPicker(page, 2)).toHaveAccessibleDescription('Choose who shared this item');
-  await expect(sharerPicker(page, 2)).toHaveAttribute('aria-invalid', 'true');
-  await panel.getByRole('button', { name: 'Done' }).click();
-  await expect(panel).toHaveCount(0);
+  for (const box of [ali(1), sara(1)]) {
+    await expect(box).toHaveAccessibleDescription('');
+    await expect(box).not.toHaveAttribute('aria-invalid', 'true');
+  }
+  for (const box of [ali(2), sara(2)]) {
+    await expect(box).toHaveAccessibleDescription('Choose who shared this item');
+    await expect(box).toHaveAttribute('aria-invalid', 'true');
+  }
 
   // Ticking Sara on item 2 clears the last one. Calculate was never pressed, so there is still no result.
-  await sharerPicker(page, 2).click();
-  await panel.getByRole('checkbox', { name: 'Sara', exact: true }).check();
+  await sara(2).check();
   await expect(errors).toHaveCount(0);
-  await expect(sharerPicker(page, 2)).not.toHaveAttribute('aria-invalid', 'true');
-  await panel.getByRole('button', { name: 'Done' }).click();
+  for (const box of [ali(2), sara(2)]) await expect(box).not.toHaveAttribute('aria-invalid', 'true');
   await expect(page.getByText('Press Calculate to see results')).toBeVisible();
   await expect(page.getByTestId('grand-total')).toHaveCount(0);
 });

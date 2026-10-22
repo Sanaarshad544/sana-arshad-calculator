@@ -81,10 +81,44 @@ export function fromInput(input: BillInput | GroupBillInput, currency?: string):
   });
 }
 
+/** Who shared an item, counting only people on the bill (unticked people's ticks are kept but not used). */
+function sharersOnBill(state: BillFormState, item: ItemRow): string[] {
+  return item.sharerIds.filter((id) => state.participantIds.includes(id));
+}
+
+/**
+ * A spare line (e.g. the one Enter adds) has no name, no price and, split by
+ * items, nobody ticked: it's left out.
+ */
+export function isBlankItem(state: BillFormState, item: ItemRow): boolean {
+  const ticked = state.splitMode === 'itemized' && sharersOnBill(state, item).length > 0;
+  return item.name.trim() === '' && item.price.trim() === '' && !ticked;
+}
+
+/** The item lines that count, and where each sits on the form. */
+function usedItems(state: BillFormState): { rows: ItemRow[]; positions: number[] } {
+  const positions = state.items.flatMap((item, i) => (isBlankItem(state, item) ? [] : [i]));
+  return { rows: positions.map((i) => state.items[i]), positions };
+}
+
+/**
+ * Messages about items are numbered by the lines that count; point them back at
+ * the lines on the form, so each shows next to the right box.
+ */
+export function toFormErrors(state: BillFormState, errors: FieldErrors): FieldErrors {
+  const { positions } = usedItems(state);
+  const out: FieldErrors = {};
+  for (const [key, message] of Object.entries(errors)) {
+    const m = /^items\.(\d+)\.(.+)$/.exec(key);
+    out[m ? `items.${positions[Number(m[1])] ?? m[1]}.${m[2]}` : key] = message;
+  }
+  return out;
+}
+
 export function toBillInput(state: BillFormState): BillInput {
   return {
     name: state.name,
-    items: state.items.map((it) => ({ name: it.name, price: it.price })),
+    items: usedItems(state).rows.map((it) => ({ name: it.name, price: it.price })),
     tax: state.tax,
     otherCharges: state.otherCharges,
     tip: state.tip,
@@ -95,7 +129,7 @@ export function toBillInput(state: BillFormState): BillInput {
 export function toGroupBillInput(state: BillFormState): GroupBillInput {
   return {
     ...toBillInput(state),
-    items: state.items.map((it) => ({ name: it.name, price: it.price, sharerIds: it.sharerIds })),
+    items: usedItems(state).rows.map((it) => ({ name: it.name, price: it.price, sharerIds: sharersOnBill(state, it) })),
     splitMode: state.splitMode,
     participantIds: state.participantIds,
     payerId: state.payerId,
@@ -117,12 +151,12 @@ export type CalcOutcome = { ok: true; result: CalcResult } | { ok: false; errors
 export function calculate(state: BillFormState, kind: 'solo' | 'group', checkSoloCurrency: boolean): CalcOutcome {
   if (kind === 'group') {
     const checked = checkGroupBill(toGroupBillInput(state));
-    if (!checked.ok) return { ok: false, errors: checked.errors };
+    if (!checked.ok) return { ok: false, errors: toFormErrors(state, checked.errors) };
     const r = computeGroupBill(checked.value);
     return { ok: true, result: { totals: r.totals, shares: r.shares } };
   }
   const checked = checkBill(toBillInput(state));
-  const errors: FieldErrors = checked.ok ? {} : { ...checked.errors };
+  const errors: FieldErrors = checked.ok ? {} : toFormErrors(state, checked.errors);
   if (checkSoloCurrency) {
     const currency = checkCurrency(chosenCurrency(state));
     if (!currency.ok) errors.currency = currency.message;
@@ -136,20 +170,28 @@ export function canAddItem(state: BillFormState): boolean {
 }
 
 
-/** Item keys are only for React; they don't count as unsaved changes. */
+/** What counts as a change: item keys (React only) and spare empty lines don't. */
 export function stripKeys(state: BillFormState) {
-  return { ...state, items: state.items.map(({ name, price, sharerIds }) => ({ name, price, sharerIds })) };
+  return { ...state, items: usedItems(state).rows.map(({ name, price, sharerIds }) => ({ name, price, sharerIds })) };
 }
 
 /** Smooth scrolling, unless the person has asked their device to reduce motion. */
-function scrollBehavior(): ScrollBehavior {
+export function scrollBehavior(): ScrollBehavior {
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
 }
 
-/** After Calculate: bring the results into view and move focus there, so they are read out. */
+/**
+ * After Calculate: bring the results into view and move focus there, so they are
+ * read out. "nearest" leaves the page still when they're already on screen (beside
+ * the form on a computer) and scrolls only as far as needed on a phone.
+ * If the person has already clicked into another field, focus stays there.
+ */
 export function revealResults(results: HTMLElement | null): void {
+  const focusedAtCalculate = document.activeElement;
   window.setTimeout(() => {
-    results?.scrollIntoView({ behavior: scrollBehavior(), block: 'start' });
+    const now = document.activeElement;
+    if (now !== focusedAtCalculate && now !== document.body && now !== null) return;
+    results?.scrollIntoView({ behavior: scrollBehavior(), block: 'nearest' });
     results?.focus({ preventScroll: true });
   }, 0);
 }
@@ -168,11 +210,11 @@ export interface RateLabels {
 
 /** The rate behind each results line: "(5%)", "(15% of items + tax)". Blank for amounts. */
 export function rateLabels(state: BillFormState): RateLabels {
-  // A blank box counts as nothing, so it gets no rate.
+  // A blank or zero box counts as nothing, so it gets no rate.
   const pct = (c: ChargeInput) => {
     if (c.mode !== 'percent' || c.value.trim() === '') return null;
     const bp = parseHundredths(c.value);
-    return bp === null ? null : `${formatPercent(bp)}%`;
+    return bp === null || bp === 0 ? null : `${formatPercent(bp)}%`;
   };
   const tax = pct(state.tax);
   const other = pct(state.otherCharges);

@@ -54,7 +54,9 @@ test("US-09/US-10/US-11 create a group, add friends, see and copy each person's 
   await expect(page.getByRole('button', { name: /regenerate/i })).toHaveCount(0);
 });
 
-test('US-14/US-15/US-16/US-17 itemized bill with the people dropdown, balances, record a payment', async ({ page }, info) => {
+test('US-14/US-15/US-16/US-17 itemized bill with name chips, balances, record a payment', async ({ page, browserName }, info) => {
+  // Safari moves between form controls with Alt+Tab.
+  const tab = browserName === 'webkit' ? 'Alt+Tab' : 'Tab';
   await signUpFast(page, info);
   const { groupId } = await makeGroup(page, 'Dinner club', '$', ['Ali', 'Sara']);
   await page.goto(`/groups/${groupId}`);
@@ -64,39 +66,38 @@ test('US-14/US-15/US-16/US-17 itemized bill with the people dropdown, balances, 
   const me = page.getByRole('group', { name: 'Who took part' });
   await me.getByRole('checkbox').first().uncheck();
   await page.getByLabel('Who paid').selectOption({ label: 'Ali' });
-  await page.getByText('By items (each pays for what they had)').click();
+  await page.getByRole('radio', { name: 'By items (each pays for what they had)' }).check();
 
+  // Each item has its own "Shared by" chips: tap Ali on the steak.
+  const sharedBy = (n: number) => page.getByRole('group', { name: `Who shared item ${n}`, exact: true });
+  const person = (n: number, name: string) => sharedBy(n).getByRole('checkbox', { name, exact: true });
   await page.getByLabel('Item 1 name').fill('Steak');
   await page.getByLabel('Item 1 price').fill('40.00');
-  await page.getByRole('button', { name: /Who shared item 1/ }).click();
-  await page.getByRole('checkbox', { name: 'Ali' }).last().check();
-  await page.getByRole('button', { name: 'Done' }).click();
-  await expect(page.getByRole('button', { name: /Who shared item 1/ })).toContainText('Ali');
+  await person(1, 'Ali').check();
+  await expect(sharedBy(1).getByRole('checkbox', { checked: true })).toHaveCount(1);
 
   await page.getByRole('button', { name: '+ Add item' }).click();
   await page.getByLabel('Item 2 name').fill('Salad');
   await page.getByLabel('Item 2 price').fill('10.00');
-  // Item 2 left with nobody: a clear message.
+  // Item 2 left with nobody: a clear message under its chips.
   await page.getByRole('button', { name: 'Calculate' }).click();
-  await expect(page.getByText('Choose who shared this item').last()).toBeVisible();
-  // Focus jumps to the first field with a problem.
-  await expect(page.getByRole('button', { name: /Who shared item 2/ })).toBeFocused();
+  await expect(sharedBy(2).getByText('Choose who shared this item')).toBeVisible();
+  // Focus jumps to the first field with a problem: the first chip of item 2.
+  await expect(person(2, 'Ali')).toBeFocused();
 
-  // Keyboard: open the dropdown, arrow down to Sara, tick with Space, Esc closes.
-  await page.keyboard.press('Enter');
-  await expect(page.getByRole('checkbox', { name: 'Ali' }).last()).toBeFocused();
-  await page.keyboard.press('ArrowDown');
-  await expect(page.getByRole('checkbox', { name: 'Sara' }).last()).toBeFocused();
+  // Keyboard: move on to Sara's chip and tick it with Space. The message goes at once.
+  await page.keyboard.press(tab);
+  await expect(person(2, 'Sara')).toBeFocused();
   await page.keyboard.press('Space');
-  await page.keyboard.press('Escape');
-  await expect(page.getByRole('button', { name: /Who shared item 2/ })).toContainText('Sara');
+  await expect(person(2, 'Sara')).toBeChecked();
+  await expect(sharedBy(2).getByText('Choose who shared this item')).toHaveCount(0);
 
-  const tax = page.getByRole('group', { name: 'Tax' });
-  await tax.getByRole('radio', { name: 'Amount' }).check();
-  await tax.getByRole('textbox').fill('5.00');
+  const taxGroup = page.getByRole('group', { name: 'Tax', exact: true });
+  await taxGroup.getByRole('radio', { name: 'Amount' }).check();
+  await taxGroup.getByRole('textbox').fill('5.00');
   const other = page.getByRole('group', { name: /Other charges/ });
   await other.getByRole('textbox').fill('2.50');
-  const tip = page.getByRole('group', { name: 'Tip' });
+  const tip = page.getByRole('group', { name: 'Tip', exact: true });
   await tip.getByRole('radio', { name: 'Amount' }).check();
   await tip.getByRole('textbox').fill('10.00');
   await page.getByRole('button', { name: 'Calculate' }).click();
@@ -108,9 +109,11 @@ test('US-14/US-15/US-16/US-17 itemized bill with the people dropdown, balances, 
   await expect(shares.nth(1)).toContainText('Sara');
   await expect(shares.nth(1)).toContainText('$13.50');
 
+  // Saving goes to the group's bills, with the new bill marked "Saved".
   await page.getByRole('button', { name: 'Save bill' }).click();
   await expect(page.getByRole('status').getByText('Bill saved')).toBeVisible();
   await expect(page.getByRole('heading', { level: 1, name: 'Dinner club' })).toBeVisible();
+  await expect(page.getByText('Saved', { exact: true })).toBeVisible();
 
   // Balances first, with sign and words as well as colour.
   const rows = page.getByTestId('balance-row');

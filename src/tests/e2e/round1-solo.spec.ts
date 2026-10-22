@@ -287,15 +287,21 @@ test.describe('US-26 #11 Save bill is below the results', () => {
     expect(await gapBelow(results(page), saveButton(page))).toBeGreaterThanOrEqual(0);
   });
 
-  test('on a saved bill, Save bill is still below the results', async ({ page }, info) => {
+  test('on a saved bill being edited, Calculate is above the results and Save bill is still below them', async ({ page }, info) => {
     await openNewSolo(page, info);
     await page.getByLabel('Bill name').fill('Saved under the receipt');
     await page.getByLabel('Item 1 price').fill('20');
     await saveButton(page).click();
-    await expect(page.getByRole('heading', { level: 1, name: 'Saved under the receipt' })).toBeVisible();
-    await expect(page).toHaveURL(/\/solo\/\d+$/);
+    // Saving ends in the history; a saved bill opens as a read-only receipt, and "Edit bill" brings the form back.
+    await expect(page.getByRole('heading', { level: 1, name: 'Solo bills' })).toBeVisible();
+    await page.getByRole('link', { name: /Saved under the receipt/ }).click();
+    await expect(page.getByRole('heading', { level: 1, name: 'Saved under the receipt', exact: true })).toBeVisible();
+    await page.getByRole('link', { name: 'Edit bill' }).click();
+    await expect(page.getByRole('heading', { level: 1, name: 'Edit Saved under the receipt' })).toBeVisible();
+    await expect(page).toHaveURL(/\/solo\/\d+\/edit$/);
     await expect(grandTotal(page)).toHaveText('$20.00');
-    expect(await gapBelow(results(page), saveButton(page))).toBeGreaterThanOrEqual(0);
+    expect(await gapBelow(page.getByRole('button', { name: 'Calculate' }), results(page)), 'results under Calculate').toBeGreaterThanOrEqual(0);
+    expect(await gapBelow(results(page), saveButton(page)), 'Save under the results').toBeGreaterThanOrEqual(0);
   });
 });
 
@@ -523,14 +529,15 @@ test('US-06 #2 PKR is in the currency picker, and a solo bill in PKR shows amoun
   await expect(totalLine(page, 'Subtotal')).toHaveText('PKR 12.50');
   await expect(grandTotal(page)).toHaveText('PKR 12.50');
 
-  // Saved, it is kept in PKR and shown that way in the history.
+  // Saved, it is kept in PKR and shown that way in the history and on its receipt.
   await saveButton(page).click();
-  await expect(page.getByRole('heading', { level: 1, name: 'Karachi lunch' })).toBeVisible();
-  await expect(grandTotal(page)).toHaveText('PKR 12.50');
-  await page.getByRole('link', { name: 'Solo bills' }).first().click();
   await expect(page.getByRole('heading', { level: 1, name: 'Solo bills' })).toBeVisible();
   const row = page.getByRole('link', { name: /Karachi lunch/ });
   await expect(row).toContainText('PKR 12.50');
+  await row.click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Karachi lunch', exact: true })).toBeVisible();
+  await expect(page.getByText('Amounts in PKR.')).toBeVisible();
+  await expect(grandTotal(page)).toHaveText('PKR 12.50');
   const { bills } = await api<{ bills: { currency: string; totalCents: number }[] }>(page, 'get', '/solo-bills');
   expect(bills).toEqual([expect.objectContaining({ currency: 'PKR', totalCents: 1250 })]);
 });

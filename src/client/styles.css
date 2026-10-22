@@ -26,6 +26,8 @@
   --lift-high: 0 12px 32px rgba(24, 35, 31, 0.14);
   --font-body: 'Public Sans Variable', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --font-display: 'Bricolage Grotesque Variable', 'Public Sans Variable', system-ui, sans-serif;
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%2355625c' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E");
+  --tick: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23ffffff' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 8.5l3 3 6-7'/%3E%3C/svg%3E");
 }
 
 @media (prefers-color-scheme: dark) {
@@ -51,6 +53,8 @@
     --skeleton: #29322e;
     --lift: none;
     --lift-high: 0 12px 32px rgba(0, 0, 0, 0.45);
+    --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23a2aea8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E");
+    --tick: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%232a0f25' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 8.5l3 3 6-7'/%3E%3C/svg%3E");
   }
 }
 
@@ -76,6 +80,8 @@
   --skeleton: #29322e;
   --lift: none;
   --lift-high: 0 12px 32px rgba(0, 0, 0, 0.45);
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23a2aea8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E");
+  --tick: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%232a0f25' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 8.5l3 3 6-7'/%3E%3C/svg%3E");
 }
 
 *,
@@ -148,11 +154,12 @@ main:focus,
   color: var(--ink);
   padding: 10px 14px;
   border-radius: 10px;
-  box-shadow: var(--lift-high);
 }
 
+/* The shadow only while it's shown, so it never peeks in at the top of the page. */
 .skip-link:focus {
   top: 12px;
+  box-shadow: var(--lift-high);
 }
 
 .muted {
@@ -422,6 +429,8 @@ main:focus,
 
 .back-link {
   display: inline-block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
   margin-bottom: 8px;
   padding: 2px 0;
   color: var(--muted);
@@ -433,7 +442,7 @@ main:focus,
   color: var(--accent);
 }
 
-.group-meta {
+.page-meta {
   margin: -18px 0 24px;
 }
 
@@ -728,7 +737,14 @@ fieldset {
 }
 
 .select {
-  appearance: auto;
+  appearance: none;
+  padding-right: 44px;
+  background-image: var(--chevron);
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  background-size: 16px;
+  text-overflow: ellipsis;
+  cursor: pointer;
 }
 
 .input-short {
@@ -817,10 +833,178 @@ fieldset {
   gap: 24px;
 }
 
-/* Items: a ruled list with column headings on wide screens. */
+/* Editor layout: the form, then Calculate, the receipt and Save. Side by side on wide screens. */
+.bill-layout {
+  display: grid;
+  gap: 24px;
+  align-items: start;
+}
+
+.bill-side {
+  display: grid;
+  gap: 16px;
+}
+
+.bill-side .receipt-wrap,
+.bill-side .save-bar {
+  max-width: none;
+  margin-top: 0;
+}
+
+@media (min-width: 1180px) {
+  .bill-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);
+  }
+  .bill-side {
+    position: sticky;
+    top: 24px;
+    max-height: calc(100vh - 48px);
+    overflow-y: auto;
+    /* Room for focus outlines and the receipt's shadow inside the scroll area. */
+    margin: -6px;
+    padding: 6px;
+  }
+}
+
+/* People: name chips, then who paid and how to split. */
+.bill-people {
+  display: grid;
+  gap: 18px;
+}
+
+.bill-people > .section-title {
+  margin-bottom: 0;
+}
+
+.people-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 18px 20px;
+  align-items: start;
+}
+
+.chips-field {
+  display: grid;
+  gap: 8px;
+}
+
+.chips-legend {
+  float: left;
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 0;
+}
+
+.chips-legend + * {
+  clear: both;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 6px 14px 6px 10px;
+  border: 1.5px solid var(--control);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  overflow-wrap: anywhere;
+}
+
+/* The real tick box covers the chip, so a tap anywhere toggles it. */
+.chip input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.chip::before {
+  content: '';
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px var(--control);
+}
+
+.chip:hover {
+  border-color: var(--ink);
+}
+
+.chip:has(input:checked),
+.chip[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.chip:has(input:checked)::before,
+.chip[aria-pressed='true']::before {
+  box-shadow: none;
+  background: var(--accent) var(--tick) center / 14px no-repeat;
+}
+
+.chip:has(input:focus-visible) {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.chip:has(input[aria-invalid='true']) {
+  border-color: var(--danger);
+}
+
+.chip-everyone {
+  border-style: dashed;
+  font: inherit;
+  font-weight: 600;
+}
+
+.item-shared-by {
+  color: var(--muted);
+  font-size: 0.875rem;
+  font-weight: 650;
+  margin-bottom: 4px;
+}
+
+.item-row .chip {
+  min-height: 36px;
+  padding-block: 4px;
+  font-size: 0.9375rem;
+}
+
+/* Items: one ruled line each, name and price side by side, remove at the end. */
+.item-head,
+.item-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) min(140px, 32%) 44px;
+  gap: 8px;
+}
 
 .item-head {
-  display: none;
+  padding-bottom: 6px;
+  color: var(--muted);
+  font-size: 0.875rem;
+  font-weight: 650;
+  border-bottom: 1px solid var(--line);
+}
+
+.item-head span:nth-child(2) {
+  text-align: right;
+  padding-right: 16px;
 }
 
 .items {
@@ -832,101 +1016,147 @@ fieldset {
 
 .item-row {
   display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto;
-  gap: 8px 12px;
-  align-items: start;
+  gap: 10px;
   padding: 10px 0;
   border-bottom: 1px dashed var(--line);
 }
 
-.item-row-itemized {
-  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 2fr) auto;
+.item-main {
+  align-items: start;
 }
 
-.item-remove {
-  min-height: 44px;
+.item-main > .field {
+  display: contents;
 }
 
-@media (min-width: 768px) {
-  .item-head {
-    display: grid;
-    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto;
-    gap: 12px;
-    padding-bottom: 6px;
-    color: var(--muted);
-    font-size: 0.875rem;
-    font-weight: 650;
-    border-bottom: 1px solid var(--line);
-  }
-  .item-head::after {
-    content: '';
-    width: 92px;
-  }
-  .item-head-itemized {
-    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 2fr) auto;
-  }
-  .item-head span:nth-child(2) {
-    text-align: right;
-  }
-  /* The column headings name the fields, so each row's labels are read out but not shown. */
-  .item-row .field-label {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    white-space: nowrap;
-  }
-  .item-price .input {
-    text-align: right;
-  }
+.item-main .item-name > .input {
+  grid-column: 1;
+  grid-row: 1;
 }
 
-@media (max-width: 767px) {
-  .item-row,
-  .item-row-itemized {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  }
-  .item-row .item-name,
-  .item-row .item-people {
-    grid-column: 1 / -1;
-  }
-  .item-remove {
-    align-self: end;
-    justify-self: start;
-  }
+.item-main .item-price > .input {
+  grid-column: 2;
+  grid-row: 1;
 }
 
-/* Tax, other charges and tip side by side. */
-
-.charges {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 20px;
+.item-main > .item-remove {
+  grid-column: 3;
+  grid-row: 1;
 }
 
-.charges .tip-on {
+.item-main .field-error {
   grid-column: 1 / -1;
 }
 
-@media (max-width: 1000px) {
-  .charges {
-    grid-template-columns: minmax(0, 1fr);
-  }
+/* The column headings name the boxes, so each row's labels are read out but not shown. */
+.item-row .item-name .field-label,
+.item-row .item-price .field-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
-.charge-row {
+.item-price .input {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.icon-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.icon-btn svg {
+  width: 20px;
+  height: 20px;
+}
+
+.icon-btn:hover {
+  background: var(--surface-2);
+  color: var(--danger);
+}
+
+.add-item {
+  width: 100%;
+  border: 1.5px dashed var(--control);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--ink);
+}
+
+.add-item:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+.add-item-hint {
+  margin-top: 8px;
+}
+
+/* Tax, other charges and tip: one line each, like the foot of a bill. */
+.charges {
+  display: grid;
+  gap: 14px;
+}
+
+.charges > .section-title {
+  margin-bottom: 0;
+}
+
+.charge-grid {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 200px) auto;
+  gap: 8px 12px;
+  align-items: center;
+}
+
+.charge-label {
+  font-weight: 650;
+}
+
+.charge-error,
+.charge .tip-on {
+  grid-column: 2 / -1;
+}
+
+/* A long message wraps under the box instead of widening the % / amount switch's
+   column, which would squeeze the box. */
+.charge-error {
+  contain: inline-size;
+}
+
+.charge .input-money {
+  max-width: none;
+}
+
+.tip-on {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  margin-top: 6px;
+  gap: 6px 10px;
 }
 
-.charge-row .input-money {
-  flex: 1 1 110px;
-  max-width: none;
-  min-width: 0;
+@media (max-width: 560px) {
+  .charge-grid {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .charge-label,
+  .charge-error,
+  .charge .tip-on {
+    grid-column: 1 / -1;
+  }
 }
 
 .segmented {
@@ -942,9 +1172,9 @@ fieldset {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 34px;
-  min-width: 44px;
-  padding: 0 12px;
+  min-height: 36px;
+  min-width: 46px;
+  padding: 0 14px;
   border-radius: 999px;
   color: var(--muted);
   font-weight: 650;
@@ -954,6 +1184,8 @@ fieldset {
 .seg input {
   position: absolute;
   inset: 0;
+  width: 100%;
+  height: 100%;
   margin: 0;
   opacity: 0;
   cursor: pointer;
@@ -964,80 +1196,147 @@ fieldset {
   color: var(--on-accent);
 }
 
+/* A symbol is at most 3 characters; while a longer one is being typed it is cut short here. */
+.seg-symbol {
+  display: inline-block;
+  max-width: 4em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
 .seg:has(input:focus-visible) {
   outline: 3px solid var(--focus);
   outline-offset: 2px;
 }
 
-fieldset:disabled .seg {
-  cursor: not-allowed;
+.segmented-small .seg {
+  min-height: 32px;
+  font-size: 0.9375rem;
 }
 
-/* People dropdown */
-
-.picker {
-  position: relative;
-  display: grid;
-  gap: 6px;
+.split-switch {
+  display: flex;
 }
 
-.picker-button {
+.split-switch .seg {
+  flex: 1;
+  white-space: nowrap;
+}
+
+/* A saved solo bill's currency, shown as fixed. */
+.currency-fixed strong {
+  display: inline-block;
+  padding: 4px 14px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  font-size: 1.0625rem;
+}
+
+/* "Currency: Rs" with its info button. */
+.currency-line {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  min-height: 44px;
-  padding: 9px 14px;
-  border: 1.5px solid var(--control);
-  border-radius: 12px;
-  background: var(--surface);
+  gap: 4px;
+}
+
+.currency-symbol {
   color: var(--ink);
-  font: inherit;
-  text-align: left;
+}
+
+.info-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--accent);
   cursor: pointer;
 }
 
-.picker-button:hover {
-  border-color: var(--ink);
+.info-btn svg {
+  width: 20px;
+  height: 20px;
 }
 
-.picker-empty {
-  color: var(--muted);
+.info-btn:hover,
+.info-btn[aria-expanded='true'] {
+  background: var(--accent-soft);
 }
 
-.picker-button[aria-invalid='true'] {
-  border-color: var(--danger);
-  box-shadow: 0 0 0 1px var(--danger);
+/* The hidden attribute always wins over a display value set here. */
+[hidden] {
+  display: none !important;
 }
 
-.picker-caret {
-  flex: none;
-}
-
-.picker-panel {
-  position: absolute;
-  top: 50px;
-  left: 0;
-  right: 0;
-  z-index: 10;
+.info-note {
   display: grid;
-  gap: 8px;
-  min-width: 210px;
-  padding: 10px 14px 14px;
+  gap: 6px;
+  max-width: 560px;
+  margin-top: 8px;
+  padding: 12px 16px;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 12px 12px 0;
   background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  box-shadow: var(--lift-high);
-}
-
-.picker-panel fieldset {
-  display: grid;
-  max-height: 240px;
-  overflow-y: auto;
+  color: var(--ink);
+  font-size: 0.9375rem;
 }
 
 /* ---------- The receipt (results) ---------- */
+
+.bill-summary {
+  margin: -16px 0 22px;
+  color: var(--muted);
+}
+
+.alert + .bill-summary {
+  margin-top: 12px;
+}
+
+.receipt-items {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0 0 14px;
+  display: grid;
+  gap: 8px;
+  border-bottom: 2px dashed var(--line);
+}
+
+.receipt-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.receipt-item-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.receipt-amount {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.payer-line {
+  margin-top: 16px;
+  overflow-wrap: anywhere;
+}
+
+.link-row-saved {
+  background: var(--accent-soft);
+}
+
+.link-row .badge-saved {
+  margin-left: 4px;
+  background: var(--accent);
+  color: var(--on-accent);
+}
 
 .receipt-wrap {
   max-width: 560px;
@@ -1413,11 +1712,13 @@ fieldset:disabled .seg {
 .dialog-title {
   margin-bottom: 12px;
   font-size: 1.375rem;
+  overflow-wrap: anywhere;
 }
 
 .dialog-body {
   margin-bottom: 22px;
   color: var(--muted);
+  overflow-wrap: anywhere;
 }
 
 .dialog-actions {
@@ -1425,6 +1726,13 @@ fieldset:disabled .seg {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 10px;
+}
+
+/* A button that names someone ("Join as …") wraps rather than sticking out of the dialog. */
+.dialog-actions .btn {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: center;
 }
 
 /* Codes */
@@ -1446,11 +1754,12 @@ fieldset:disabled .seg {
 .balance-row > span,
 .suggest-row > span,
 .member-row > span,
+.member-main > span,
 .activity-row > span,
 .person,
 .share-name,
 .check span,
-.picker-button {
+.chip span {
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -1587,6 +1896,7 @@ fieldset:disabled .seg {
 .callout-title {
   margin: 0;
   font-size: 1.0625rem;
+  overflow-wrap: anywhere;
 }
 
 .rename-form {
@@ -1640,4 +1950,35 @@ fieldset:disabled .seg {
   justify-self: start;
   min-height: 24px;
   font-weight: 500;
+}
+
+/* High contrast (forced colours): shadows and fills are removed, so ticked chips
+   and the chosen side of each switch are drawn with system colours instead. */
+@media (forced-colors: active) {
+  .chip::before {
+    box-shadow: none;
+    border: 2px solid CanvasText;
+  }
+  .chip:has(input:checked)::before,
+  .chip[aria-pressed='true']::before {
+    forced-color-adjust: none;
+    background: Highlight;
+    border-color: Highlight;
+  }
+  .seg-on {
+    forced-color-adjust: none;
+    background: Highlight;
+    color: HighlightText;
+  }
+}
+
+/* Long names with no spaces wrap instead of pushing the page sideways. */
+.page-header > div {
+  min-width: 0;
+}
+
+.alert,
+.bill-summary,
+.receipt-item .muted {
+  overflow-wrap: anywhere;
 }

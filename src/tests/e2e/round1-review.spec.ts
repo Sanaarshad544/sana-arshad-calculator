@@ -1,4 +1,4 @@
-import { expect, test, type Browser, type BrowserContext, type Page, type TestInfo } from '@playwright/test';
+import { expect, test, type Browser, type BrowserContext, type Locator, type Page, type TestInfo } from '@playwright/test';
 import { PASSWORD, api, makeGroup, signUpFast } from './helpers.js';
 
 // Changes made after the security and code reviews of QA round 1: who can see an
@@ -286,37 +286,194 @@ test('US-26 #11 when the server rejects a field on Save, the message shows above
   await expect(alert).toHaveText('Please fix the highlighted fields');
 });
 
-test('US-18 #5 the "Restore Omar to change this bill" message for Delete shows at the top, next to Delete', async ({ page }, info) => {
+test('US-26 #11 on a group bill, when the server rejects who shared an item on Save, the message shows under that item\'s chips, the page message sits above Save, and the cursor moves to its first chip', async ({ page }, info) => {
   await signUpFast(page, info);
-  const { groupId, ids } = await makeGroup(page, 'Locked', '$', ['Omar']);
-  // Omar pays for only himself, so his balance is 0.00 and he can be removed.
+  const { groupId } = await makeGroup(page, 'Rejected', '$', ['Ali']);
+  await page.goto(`/groups/${groupId}/bills/new`);
+  await expect(page.getByRole('heading', { level: 1, name: 'Add bill to Rejected' })).toBeVisible();
+  await page.getByRole('radio', { name: 'By items (each pays for what they had)' }).check();
+  await page.getByLabel('Item 1 price').fill('10');
+  const chips = page.getByRole('group', { name: 'Who shared item 1', exact: true });
+  await chips.getByRole('checkbox', { name: 'Ali', exact: true }).check();
+  await page.route('**/api/groups/*/bills', (route) =>
+    route.request().method() !== 'POST'
+      ? route.continue()
+      : route.fulfill({
+          status: 400,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: { message: 'Please fix the highlighted fields', fields: { 'items.0.sharers': 'Choose who shared this item' } } }),
+        }),
+  );
+  await page.getByRole('button', { name: 'Save bill' }).click();
+
+  // The field's message is under its chips, and the cursor is on the first of them.
+  await expect(chips.getByText('Choose who shared this item')).toBeVisible();
+  await expect(chips.getByRole('checkbox').first()).toBeFocused();
+  for (const box of await chips.getByRole('checkbox').all()) await expect(box).toHaveAttribute('aria-invalid', 'true');
+  // The page's message sits just above the Save button.
+  const alert = page.getByRole('alert');
+  await expect(alert).toHaveText('Please fix the highlighted fields');
+  const [alertEdges, saveEdges] = await edgesOf(page, [alert, page.getByRole('button', { name: 'Save bill' })]);
+  expect(alertEdges.bottom).toBeLessThan(saveEdges.top + 1);
+  // Nothing was saved, and the form is still there.
+  await expect(page).toHaveURL(new RegExp(`/groups/${groupId}/bills/new$`));
+  await page.unroute('**/api/groups/*/bills');
+  const { bills } = await api<{ bills: unknown[] }>(page, 'get', `/groups/${groupId}/bills`);
+  expect(bills).toEqual([]);
+});
+
+/** A saved bill that `member` paid for, after they were removed (their balance was 0.00, so they could be). */
+async function billOfRemovedMember(page: Page, groupName: string, member = 'Omar'): Promise<{ groupId: string; billId: string; memberId: string }> {
+  const { groupId, ids } = await makeGroup(page, groupName, '$', [member]);
+  // They pay for only themselves, so their balance is 0.00.
   const { billId } = await api<{ billId: string }>(page, 'post', `/groups/${groupId}/bills`, {
     bill: {
-      name: 'Omar snack',
+      name: `${member} snack`.slice(0, 60),
       items: [{ name: '', price: '5' }],
       tax: { mode: 'amount', value: '0' },
       otherCharges: { mode: 'amount', value: '' },
       tip: { mode: 'amount', value: '0' },
       tipOn: 'items',
       splitMode: 'equal',
-      participantIds: [ids.Omar],
-      payerId: ids.Omar,
+      participantIds: [ids[member]],
+      payerId: ids[member],
     },
   });
-  await api(page, 'post', `/groups/${groupId}/members/${ids.Omar}/remove`);
+  await api(page, 'post', `/groups/${groupId}/members/${ids[member]}/remove`);
+  return { groupId, billId, memberId: ids[member] };
+}
+
+/** The top and bottom edge of each element, measured in the same instant so a scroll can't skew them. */
+async function edgesOf(page: Page, targets: Locator[]): Promise<{ top: number; bottom: number }[]> {
+  const handles = await Promise.all(targets.map((target) => target.elementHandle()));
+  try {
+    return await page.evaluate(
+      (elements) =>
+        elements.map((el) => {
+          if (!el) throw new Error('element not found on the page');
+          const box = el.getBoundingClientRect();
+          return { top: box.top, bottom: box.bottom };
+        }),
+      handles,
+    );
+  } finally {
+    await Promise.all(handles.map((handle) => handle?.dispose()));
+  }
+}
+
+test('US-18 #5 the "Restore Omar to change this bill" message for Delete shows at the top, next to Delete', async ({ page }, info) => {
+  await signUpFast(page, info);
+  const { groupId, billId } = await billOfRemovedMember(page, 'Locked');
   await page.goto(`/groups/${groupId}/bills/${billId}`);
   await expect(page.getByRole('heading', { level: 1, name: 'Omar snack' })).toBeVisible();
   await page.getByRole('button', { name: 'Delete', exact: true }).click();
   const alert = page.getByRole('alert').filter({ hasText: 'Restore Omar to change this bill' });
   await expect(alert).toBeVisible();
-  const [alertTop, formTop, deleteBottom] = await page.evaluate(() => {
-    const a = [...document.querySelectorAll('[role="alert"]')].find((el) => el.textContent?.includes('Restore Omar'));
-    const f = document.querySelector('form.card');
-    const d = [...document.querySelectorAll('button')].find((el) => el.textContent?.trim() === 'Delete');
-    return [a?.getBoundingClientRect().top ?? -1, f?.getBoundingClientRect().top ?? -1, d?.getBoundingClientRect().bottom ?? -1];
+  // Straight under the Delete button, before anything of the bill itself: its summary line, then the receipt.
+  const summary = page.getByText(/^Omar \(removed\) paid on /);
+  const receipt = page.getByRole('region', { name: 'Bill', exact: true });
+  const [alertEdges, summaryEdges, receiptEdges, deleteEdges] = await edgesOf(page, [alert, summary, receipt, page.getByRole('button', { name: 'Delete', exact: true })]);
+  expect(alertEdges.top).toBeGreaterThan(deleteEdges.bottom - 1);
+  expect(alertEdges.bottom).toBeLessThan(summaryEdges.top + 1);
+  expect(summaryEdges.bottom).toBeLessThan(receiptEdges.top + 1);
+});
+
+test('US-18 #5 a bill with a removed member has no "Edit bill" button, its edit address shows the bill read-only, and Delete changes nothing', async ({ page }, info) => {
+  await signUpFast(page, info);
+  const { groupId, billId, memberId: omarId } = await billOfRemovedMember(page, 'View only');
+
+  await page.goto(`/groups/${groupId}/bills/${billId}`);
+  await expect(page.getByRole('heading', { level: 1, name: 'Omar snack' })).toBeVisible();
+  await expect(page.getByText('Omar was removed from the group, so this bill is view only. Restore Omar on the Members tab to change it.')).toBeVisible();
+  await expect(page.getByText(/^Omar \(removed\) paid on /)).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Edit bill' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Delete', exact: true })).toBeVisible();
+
+  // Typing the edit address does not open the form: it shows the read-only bill again.
+  await page.goto(`/groups/${groupId}/bills/${billId}/edit`);
+  await expect(page.getByRole('heading', { level: 1, name: 'Omar snack', exact: true })).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`/groups/${groupId}/bills/${billId}$`));
+  await expect(page.getByRole('main').getByRole('textbox')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Save bill' })).toHaveCount(0);
+
+  // Delete only explains what to do. Nothing is asked, deleted or changed.
+  await page.getByRole('button', { name: 'Delete', exact: true }).click();
+  await expect(page.getByRole('alert')).toHaveText('Restore Omar to change this bill');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  const { bills } = await api<{ bills: { id: string; name: string; totalCents: number }[] }>(page, 'get', `/groups/${groupId}/bills`);
+  expect(bills.map((b) => [b.id, b.name, b.totalCents])).toEqual([[billId, 'Omar snack', 500]]);
+
+  // The same bill is back to normal once Omar is restored.
+  await api(page, 'post', `/groups/${groupId}/members/${omarId}/restore`);
+  await page.goto(`/groups/${groupId}/bills/${billId}`);
+  await expect(page.getByRole('link', { name: 'Edit bill' })).toBeVisible();
+  await expect(page.getByText('so this bill is view only')).toHaveCount(0);
+});
+
+test('US-34 #3 on a phone 360 px wide, the view-only bill of a removed member with the longest name (30 characters, no spaces) and its "Restore … to change this bill" message do not scroll sideways', async ({ page }, info) => {
+  await signUpFast(page, info);
+  await page.setViewportSize({ width: 360, height: 780 });
+  const longName = 'W'.repeat(30);
+  const { groupId, billId } = await billOfRemovedMember(page, 'Locked and long', longName);
+  const fits = async (where: string) => {
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(overflow, `${where} scrolls sideways by ${overflow}px`).toBeLessThanOrEqual(0);
+  };
+
+  await page.goto(`/groups/${groupId}/bills/${billId}`);
+  await expect(page.getByRole('heading', { level: 1, name: `${longName} snack` })).toBeVisible();
+  await expect(page.getByText(`${longName} was removed from the group, so this bill is view only.`)).toBeVisible();
+  await fits('the view-only bill');
+  await page.getByRole('button', { name: 'Delete', exact: true }).click();
+  await expect(page.getByRole('alert')).toHaveText(`Restore ${longName} to change this bill`);
+  await fits('the view-only bill with its Delete message');
+});
+
+/** A payment from Omar to me, after Omar was removed (it cleared what he owed me, so his balance was 0.00). */
+async function paymentOfRemovedOmar(page: Page, groupName: string): Promise<{ groupId: string; settleId: string }> {
+  const { groupId, meId, ids } = await makeGroup(page, groupName, '$', ['Omar']);
+  await api(page, 'post', `/groups/${groupId}/bills`, {
+    bill: {
+      name: 'Snack',
+      items: [{ name: '', price: '10' }],
+      tax: { mode: 'amount', value: '0' },
+      otherCharges: { mode: 'amount', value: '' },
+      tip: { mode: 'amount', value: '0' },
+      tipOn: 'items',
+      splitMode: 'equal',
+      participantIds: [meId, ids.Omar],
+      payerId: meId,
+    },
   });
-  expect(alertTop).toBeGreaterThan(deleteBottom - 1);
-  expect(alertTop).toBeLessThan(formTop);
+  await api(page, 'post', `/groups/${groupId}/settle-ups`, { fromId: ids.Omar, toId: meId, amount: '5' });
+  await api(page, 'post', `/groups/${groupId}/members/${ids.Omar}/remove`);
+  const { settleUps } = await api<{ settleUps: { id: string }[] }>(page, 'get', `/groups/${groupId}/settle-ups`);
+  return { groupId, settleId: settleUps[0].id };
+}
+
+test('US-18 #5 a payment with a removed member is view only too: Delete and "Save payment" show "Restore Omar to change this bill" near the top and change nothing', async ({ page }, info) => {
+  await signUpFast(page, info);
+  const { groupId, settleId } = await paymentOfRemovedOmar(page, 'Locked payment');
+  await page.goto(`/groups/${groupId}/settle-ups/${settleId}`);
+  await expect(page.getByRole('heading', { level: 1, name: 'Payment' })).toBeVisible();
+  await expect(page.getByText('Omar was removed from the group, so this payment is view only. Restore Omar on the Members tab to change it.')).toBeVisible();
+  for (const field of ['Who paid', 'Who received it', 'Amount ($)']) await expect(page.getByLabel(field), field).toBeDisabled();
+
+  // Delete explains what to do, under the Delete button and above the fields, and asks nothing.
+  const deleteButton = page.getByRole('button', { name: 'Delete', exact: true });
+  await deleteButton.click();
+  const alert = page.getByRole('alert');
+  await expect(alert).toHaveText('Restore Omar to change this bill');
+  const [alertEdges, deleteEdges, firstFieldEdges] = await edgesOf(page, [alert, deleteButton, page.getByLabel('Who paid')]);
+  expect(alertEdges.top).toBeGreaterThan(deleteEdges.bottom - 1);
+  expect(alertEdges.bottom).toBeLessThan(firstFieldEdges.top + 1);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+
+  // Trying to save says the same. Nothing is deleted or changed.
+  await page.getByRole('button', { name: 'Save payment' }).click();
+  await expect(alert).toHaveText('Restore Omar to change this bill');
+  const { settleUps } = await api<{ settleUps: { id: string; amountCents: number }[] }>(page, 'get', `/groups/${groupId}/settle-ups`);
+  expect(settleUps.map((payment) => [payment.id, payment.amountCents])).toEqual([[settleId, 500]]);
 });
 
 test('US-25 #19 on sign up and reset, editing a field removes its own message and leaves the others', async ({ page }) => {
@@ -378,6 +535,36 @@ test('US-12 #9 a friend already in one of the groups is warned, and Cancel in "J
     await owner2.getByRole('button', { name: 'Log in and join' }).click();
     await expect(owner2.getByRole('status').filter({ hasText: 'This invite is for Omar' })).toBeVisible();
     await expect(owner2.getByText(`You're logged in as`)).toHaveCount(0);
+  } finally {
+    await closeAll(opened);
+  }
+});
+
+test('US-34 #3 at 360 px the "Join as <name>?" dialog fits the longest name (30 characters, no spaces) in its title, text and button', async ({ page, browser }, info) => {
+  const opened: BrowserContext[] = [];
+  const longName = 'W'.repeat(30);
+  try {
+    await signUpFast(page, info, 'own');
+    const groupA = await makeGroup(page, 'Group A', '$', [longName, 'Pat']);
+    const groupB = await makeGroup(page, 'Group B', '$', []);
+    await addFromOtherGroups(page, groupB.groupId, longName);
+    const pat = await newPerson(browser, opened, info, 'pat');
+    await api(pat.page, 'post', `/invites/${await inviteCodeOf(page, groupA.groupId, 'Pat')}/accept`);
+    const code = await inviteCodeOf(page, groupA.groupId, longName);
+
+    await pat.page.setViewportSize({ width: 360, height: 740 });
+    await pat.page.goto(`/invite/${code}`);
+    await pat.page.getByRole('button', { name: 'Join these groups' }).click();
+    const dialog = pat.page.getByRole('dialog', { name: `Join as ${longName}?` });
+    await expect(dialog).toBeVisible();
+    const fit = await dialog.evaluate((el) => {
+      const box = el.getBoundingClientRect();
+      const parts = [...el.querySelectorAll('h2, p, button')].map((p) => p.getBoundingClientRect());
+      return { sideways: el.scrollWidth - el.clientWidth, outside: parts.filter((r) => r.right > box.right + 0.5 || r.left < box.left - 0.5).length };
+    });
+    expect(fit.sideways, 'the dialog does not scroll sideways').toBeLessThanOrEqual(0);
+    expect(fit.outside, 'nothing sticks out of the dialog').toBe(0);
+    await expect(dialog.getByRole('button', { name: `Join as ${longName}` })).toBeVisible();
   } finally {
     await closeAll(opened);
   }

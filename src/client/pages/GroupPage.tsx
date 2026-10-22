@@ -4,8 +4,9 @@ import type { ActivityDto, GroupBillSummary, GroupDetail, MemberDto, PersonOptio
 import { centsToInput } from '../../shared/money.js';
 import { MESSAGES, checkMemberName, inviteCodeGroups } from '../../shared/rules.js';
 import { ApiError, api } from '../api.js';
-import { useBusy, useLoad } from '../hooks.js';
+import { FROM_LIST, useBusy, useLoad, useSavedBill } from '../hooks.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
+import { CurrencyNote } from '../components/CurrencyNote.js';
 import { useToast } from '../components/Toasts.js';
 import { Alert, Balance, EmptyState, ErrorText, PageHeader, Skeleton, TextField, money, niceDate, niceDateTime, usePageTitle } from '../components/ui.js';
 
@@ -67,11 +68,11 @@ export function GroupPage() {
         <Link className="btn btn-secondary" to={`/groups/${group.id}/edit`}>
           Edit group
         </Link>
-        <Link className="btn btn-primary" to={`/groups/${group.id}/bills/new`}>
+        <Link className="btn btn-primary" to={`/groups/${group.id}/bills/new`} state={tab === 'bills' ? FROM_LIST : undefined}>
           Add bill
         </Link>
       </PageHeader>
-      <p className="muted group-meta">Currency: {group.currency}</p>
+      <CurrencyNote currency={group.currency} className="page-meta" />
 
       <div className="grid-2">
         <section className="card" aria-labelledby="balances-heading">
@@ -151,18 +152,24 @@ export function GroupPage() {
 
 function BillsTab({ group, names }: { group: GroupDetail; names: Map<string, string> }) {
   const { data, error, loading } = useLoad(() => api.get<{ bills: GroupBillSummary[] }>(`/groups/${group.id}/bills`), [group.id]);
+  const { savedId, rowRef } = useSavedBill(data !== null);
   if (loading) return <Skeleton lines={3} />;
   if (error) return <Alert>{error.message}</Alert>;
   if (!data || data.bills.length === 0) {
-    return <EmptyState text="No bills yet. Add the first bill you shared." action={{ to: `/groups/${group.id}/bills/new`, label: 'Add bill' }} />;
+    return <EmptyState text="No bills yet. Add the first bill you shared." action={{ to: `/groups/${group.id}/bills/new`, label: 'Add bill', state: FROM_LIST }} />;
   }
   return (
     <ul className="link-list">
       {data.bills.map((b) => (
         <li key={b.id}>
-          <Link to={`/groups/${group.id}/bills/${b.id}`} className="link-row">
+          <Link
+            to={`/groups/${group.id}/bills/${b.id}`}
+            className={b.id === savedId ? 'link-row link-row-saved' : 'link-row'}
+            ref={b.id === savedId ? rowRef : undefined}
+          >
             <span className="link-row-title">
               {b.name}
+              {b.id === savedId && <>{' '}<span className="badge badge-saved">Saved</span></>}
               <span className="muted small">
                 {' '}
                 · {niceDate(b.date)} · paid by {names.get(b.payerId)} · {b.splitMode === 'equal' ? 'split equally' : 'by items'}
@@ -435,6 +442,7 @@ function MembersTab({ group, reload }: { group: GroupDetail; reload: () => Promi
           setPending(null);
           toast(r.outcome === 'deleted' ? 'Group deleted' : 'You left the group');
           navigate('/groups', { replace: true });
+          return 'leaving';
         }
       } catch (err) {
         setPending(null);
