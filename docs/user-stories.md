@@ -59,12 +59,12 @@ These rules come from the spec and apply wherever a story mentions them.
 
 ## Implementation progress
 
-- **Last checked:** 22 Oct 2026, against the code in `src/`, after the round 2 bill-screen redesign (read-only bills, item lines, name chips, the %/currency switch and the currency note) and its code reviews.
+- **Last checked:** 22 Oct 2026, against the code in `src/`, after the round 2 bill-screen redesign (read-only bills, item lines, name chips, the %/currency switch and the currency note), its code reviews, and the fixes from its final review (Back after saving from any tab, changes that finish after their page was left, and the 200-line limit).
 - **Implemented:** all 40 stories.
 - **Retired:** US-24 "Rejoin a group with the invite code" was retired in QA round 1. There is no group-wide code any more, and removed members come back only through Restore (US-23).
 - **How it was checked:** `npm test` (run from `src/`) passed twice in a row:
-  - 224 unit and server tests.
-  - 380 browser tests, each run in Chromium (Chrome and Edge), Firefox and WebKit (Safari), 1,140 runs in all, with automatic WCAG 2.2 AA checks in light and dark mode.
+  - 232 unit and server tests.
+  - 405 browser tests, each run in Chromium (Chrome and Edge), Firefox and WebKit (Safari), 1,215 runs in all, with automatic WCAG 2.2 AA checks in light and dark mode.
 - **Checks done by hand,** because a test can't stop Docker or install the app from scratch:
   - US-27 #3: stopping the database while the app runs, then starting it again.
   - US-28: `docker compose down` then `docker compose up -d`, and restarting the app.
@@ -76,14 +76,14 @@ Where the tests are (all in `src/tests/`):
 
 | Stories | Tests |
 |---|---|
-| Money maths, rounding, input checks and wrong-try waits (US-02, US-05, US-13, US-14, US-16, US-17, US-25) | `unit/money.test.ts`, `unit/bill.test.ts`, `unit/limits.test.ts`, `unit/billEditor.test.ts` |
+| Money maths, rounding, input checks and wrong-try waits (US-02, US-05, US-13, US-14, US-16, US-17, US-25) | `unit/money.test.ts`, `unit/bill.test.ts`, `unit/limits.test.ts`, `unit/billEditor.test.ts`, `unit/afterLeaving.test.ts` |
 | Server rules for every story | `api/accounts.test.ts`, `api/solo.test.ts`, `api/groups.test.ts`, `api/criteria-*.test.ts`, `api/review-fixes.test.ts`, `api/attempt-limits.test.ts` |
 | Personal invites, adding people from other groups, renaming (US-10 to US-12, US-20, US-21, US-39 to US-41) | `api/invites.test.ts`, `e2e/round1-groups.spec.ts`, `e2e/round1-review.spec.ts` |
 | Accounts, solo bills and input messages in the browser (US-01 to US-08, US-25 to US-27, US-34, US-35) | `e2e/accounts.spec.ts`, `e2e/solo.spec.ts`, `e2e/criteria-solo.spec.ts`, `e2e/criteria-extra.spec.ts`, `e2e/round1-solo.spec.ts` |
-| Groups, bills, balances and settle-ups in the browser (US-09 to US-19) | `e2e/groups.spec.ts`, `e2e/criteria-groups.spec.ts`, `e2e/round1-groups.spec.ts` |
+| Groups, bills, balances and settle-ups in the browser (US-09 to US-19) | `e2e/groups.spec.ts`, `e2e/criteria-groups.spec.ts`, `e2e/round1-groups.spec.ts`, `e2e/round2-bills.spec.ts` |
 | Read-only bills, Edit bill, item lines, tick chips, charges as % or amount, the currency note, and back to the list after saving (US-05 to US-08, US-13, US-14, US-18, US-26, US-39) | `e2e/round2-bills.spec.ts`, `e2e/criteria-solo.spec.ts`, `e2e/criteria-groups.spec.ts` |
 | Members leaving and coming back (US-20 to US-23) | `e2e/groups.spec.ts`, `e2e/criteria-members.spec.ts`, `e2e/round1-members.spec.ts` |
-| Dashboard, navigation, appearance, accessibility, feedback and unsaved changes (US-33 to US-38) | `e2e/layout.spec.ts`, `e2e/ux.spec.ts`, `e2e/criteria-members.spec.ts`, `e2e/round1-members.spec.ts` |
+| Dashboard, navigation, appearance, accessibility, feedback and unsaved changes (US-33 to US-38) | `e2e/layout.spec.ts`, `e2e/ux.spec.ts`, `e2e/criteria-members.spec.ts`, `e2e/round1-members.spec.ts`, `e2e/round2-bills.spec.ts` |
 
 Each test's name starts with the story and criterion it proves, for example "US-07 #3".
 
@@ -253,7 +253,7 @@ Acceptance criteria:
 3. Given I change an amount and save, then the totals are recalculated and checked with the same rules as a new bill, and I'm taken to my history with the bill marked "Saved". Invalid edits show the same messages and aren't saved.
 4. Given I edit other charges (value or % / amount), when I save, then the total is recalculated to match.
 5. Given I'm editing a saved bill, then its currency can't be changed (US-06 #7).
-6. Given I press Delete, then I'm asked to confirm. Cancel keeps the bill unchanged, and Confirm removes it from my history.
+6. Given I press Delete, then I'm asked to confirm. Cancel keeps the bill unchanged, and Confirm removes it from my history and takes me back there. Pressing Back from there doesn't show my history a second time.
 
 ---
 
@@ -389,6 +389,7 @@ Acceptance criteria:
 4. Given a settle-up amount outside 0.01–1,000,000.00, or with more than 2 decimals, letters or a blank, then a clear message is shown and nothing is saved.
 5. Given a removed member, then they're never offered as either person in a new settle-up.
 6. Given a settle-up, then it's a record only: no real money is moved.
+7. Given I record a payment from the group page (Record this payment, or Record a payment on the Settle-ups tab), then I'm taken back to the group page, on the tab I came from, and pressing Back from there doesn't show the group a second time.
 
 ### US-18 Edit and delete group bills and settle-ups
 **As a** Group member, **I want** to correct or remove any group bill or settle-up, **so that** our balances stay right.
@@ -396,10 +397,11 @@ Acceptance criteria:
 
 Acceptance criteria:
 1. Given any current member, then they can edit or delete any bill or settle-up in the group, not just their own.
-2. Given I edit a bill or settle-up and save, then it's checked with the same rules as a new one, and the balances update. After saving a bill (new or edited), I'm taken to the group's bill list with it marked "Saved". When the bill was added from the Bills tab, pressing Back from there doesn't show the group a second time.
+2. Given I edit a bill or settle-up and save, then it's checked with the same rules as a new one, and the balances update. After saving a bill (new or edited), I'm taken to the group's bill list (the Bills tab) with it marked "Saved", whichever tab I pressed Add bill on. After adding a bill, pressing Back from there doesn't show the group a second time.
 3. Given I open a saved group bill, then I see it read-only, as a receipt: its items (and, split by items, who shared each), subtotal, tax, other charges, tip, total, who paid and each person's share, with "Edit bill" and "Delete". Given I press "Edit bill", then every input is shown exactly as saved, including other charges and its % / amount setting, and editing them recalculates the bill and the balances.
-4. Given I press Delete on a bill, then I'm asked to confirm. Cancel keeps it, and Confirm removes it and updates the balances.
+4. Given I press Delete on a bill, then I'm asked to confirm. Cancel keeps it, and Confirm removes it, updates the balances and takes me back to the group's bill list. Pressing Back from there doesn't show the group a second time.
 5. Given a bill or settle-up that includes a removed member, then it can't be changed: a bill shows no "Edit bill" button (its edit address shows the read-only bill instead), a settle-up's Save shows "Restore Omar to change this bill", and Delete on either shows that message and changes nothing. A message about Delete shows at the top of the page, next to the Delete button.
+6. Given I save or delete a settle-up I opened from the Settle-ups tab, then I'm taken back to that tab, which shows the change, and pressing Back from there doesn't show the group a second time or the deleted settle-up.
 
 ### US-19 See the group's activity log
 **As a** Group member, **I want** a log of every change in the group, **so that** I can see who did what and when.
@@ -487,7 +489,7 @@ Acceptance criteria:
 8. Given other charges as a % of "abc", "-5", "0.001" or "100.01", then "Other charges must be between 0.01% and 100%, or left empty" appears next to the field and no result is shown.
 9. Given other charges of exactly 0.01 or 1,000,000.00 (amount), or exactly 0.01% or 100%, then it's accepted.
 10. Given any bill (solo, equal or itemized) with no items, when I press Calculate, then I see "Add at least one item" and no result.
-11. Given a bill with 200 items, when I add another, then I see "A bill can have at most 200 items" and no item is added.
+11. Given a bill with 200 items, when I add another, then I see "A bill can have at most 200 items" and no item is added. Given the form has 200 lines and some are still empty, "+ Add item" moves the cursor to the first empty line instead.
 12. Given 3 items of 1,000,000.00 each, when I press Calculate, then the items subtotal is 3,000,000.00 with no error (the limit is per field, not per total).
 13. Given 200 items of 1,000,000.00 each, tax 100%, other charges 100% and tip 100% on items + tax, when I press Calculate, then the result is an items subtotal of 200,000,000.00, tax 200,000,000.00, other charges 200,000,000.00, tip 400,000,000.00, and grand total exactly 1,000,000,000.00.
 14. Given an item name left blank, then on the saved bill it's shown as "Item N" by its position among the bill's items (spare empty lines don't count); on the form, the box shows the number of its line. An item name of exactly 40 characters is accepted, and 41 or more shows a clear message and no result.
@@ -603,6 +605,7 @@ Acceptance criteria:
 4. Given a page is loading its data, then grey placeholder shapes are shown until the content appears.
 5. Given I have no groups, then the Groups page shows "No groups yet. Create one to start splitting with friends." with a Create group button. Empty solo-bill, group-bill and activity lists likewise explain what to do next.
 6. Given I press Delete, Remove member, Leave or close out a group, then a pop-up asks me to confirm. The dangerous button is red, and Cancel or Stay is the safe default.
+7. Given I leave a page (for example with Back or a sidebar link) while a change I made there is still being saved or deleted (a bill, a payment, creating or editing a group, removing a member or leaving a group), then it still finishes, I stay on the page I went to, and that page updates to show the change once it's done. If the change fails instead, a red corner message says what didn't happen and why, for example "Bill not saved. Check your connection.", and stays for 10 seconds.
 
 ### US-38 Don't lose unsaved changes by accident
 **As a** Solo diner or Group member, **I want** a warning before I leave a bill I haven't saved, **so that** I don't lose a long receipt I've typed in.
@@ -611,7 +614,7 @@ Acceptance criteria:
 Acceptance criteria:
 1. Given I've changed a bill form without saving, when I click a sidebar link, the back button or any other link, then I'm asked "You have unsaved changes. Leave without saving?" with Stay and Leave.
 2. Given that question, when I press Stay, then I stay on the form with everything I typed.
-3. Given that question, when I press Leave, then I go to the other page and the changes are discarded. Nothing is saved as a draft.
+3. Given that question, when I press Leave, then I go to the other page and the changes are discarded. Nothing is saved as a draft. The exception is a save I had already started by pressing Save: it still finishes (US-37 #7).
 4. Given I've changed a bill form without saving, when I close or reload the browser tab, then the browser's own "Leave site?" prompt appears.
 5. Given I haven't changed anything, or I've just saved, when I leave the form, then no warning appears.
 
@@ -622,7 +625,7 @@ Acceptance criteria:
 - **Job:** J6 · **Status:** Implemented
 
 Acceptance criteria:
-1. Given I'm a current member, when I press "Edit group", change the name and press "Save changes", then the group has the new name everywhere and the log records "X renamed the group from 'A' to 'B'".
+1. Given I'm a current member, when I press "Edit group", change the name and press "Save changes", then the group has the new name everywhere and the log records "X renamed the group from 'A' to 'B'". I'm taken back to the group page, and pressing Back from there doesn't show the group a second time.
 2. Given I change the currency (e.g. $ to PKR), then every amount in the group shows the new symbol, nothing is converted, and the log records "X changed the currency from $ to PKR".
 3. Given a blank or 51-character name, or a bad currency symbol, then the same messages as when creating a group are shown and nothing changes.
 4. Given someone who isn't a current member, then they can't change the group, even by sending requests straight to the server.

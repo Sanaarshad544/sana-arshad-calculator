@@ -7,7 +7,7 @@ import { MESSAGES, restoreToChange } from '../../shared/rules.js';
 import { ApiError, api } from '../api.js';
 import { calculate, emptyBill, focusFirstError, fromInput, rateLabels, revealResults, stripKeys, toFormErrors, toGroupBillInput, type BillFormState, type CalcResult } from '../billEditor.js';
 import { clearFieldError, withoutKey } from '../fieldErrors.js';
-import { useBusy, useFocusFirstError, useLoad, useShowSavedBill } from '../hooks.js';
+import { announceChange, failedAfterLeaving, useBusy, useFocusFirstError, useFromList, useLoad, useShowSavedBill, useStillHere } from '../hooks.js';
 import { BillForm } from '../components/BillForm.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import { CurrencyNote } from '../components/CurrencyNote.js';
@@ -21,14 +21,14 @@ interface Loaded {
   bill: GroupBillDetail | null;
 }
 
-function useGroupBill(groupId: string | undefined, billId: string | undefined) {
+function useGroupBill(groupId: string | undefined, billId: string | undefined, reloadOnChange = false) {
   return useLoad<Loaded>(async () => {
     const [g, b] = await Promise.all([
       api.get<{ group: GroupDetail }>(`/groups/${groupId}`),
       billId ? api.get<{ bill: GroupBillDetail }>(`/groups/${groupId}/bills/${billId}`) : Promise.resolve(null),
     ]);
     return { group: g.group, bill: b?.bill ?? null };
-  }, [groupId, billId]);
+  }, [groupId, billId], { reloadOnChange });
 }
 
 /** Members by id, with "(removed)" after anyone who has been removed. */
@@ -39,7 +39,7 @@ function memberNames(group: GroupDetail): Map<string, string> {
 /** A saved group bill, read-only: the receipt with items and each share, plus Edit and Delete. */
 export function GroupBillViewPage() {
   const { groupId, billId } = useParams();
-  const { data, error, loading } = useGroupBill(groupId, billId);
+  const { data, error, loading } = useGroupBill(groupId, billId, true);
   usePageTitle(data?.bill?.name ?? 'Group bill');
   if (loading) return <Skeleton lines={6} />;
   if (error || !data?.bill) {
@@ -59,6 +59,8 @@ function GroupBillView({ group, bill }: { group: GroupDetail; bill: GroupBillDet
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [headerError, setHeaderError] = useState('');
   const { busy, run } = useBusy();
+  const here = useStillHere();
+  const fromList = useFromList();
   const locked = bill.lockedBy;
   const names = memberNames(group);
   const backTo = `/groups/${group.id}`;
@@ -77,9 +79,14 @@ function GroupBillView({ group, bill }: { group: GroupDetail; bill: GroupBillDet
         await api.del(`/groups/${group.id}/bills/${bill.id}`);
         setConfirmDelete(false);
         toast('Bill deleted');
-        navigate(backTo, { replace: true });
+        // Left while it was deleting: stay where they are, which reloads without it.
+        if (!here.current) return announceChange();
+        // Back to the bill list it was opened from, so Back afterwards doesn't show the group twice.
+        if (fromList) void navigate(-1);
+        else void navigate(backTo, { replace: true });
         return 'leaving';
       } catch (err) {
+        if (!here.current) return toast(failedAfterLeaving('Bill not deleted.', err), 'error');
         setConfirmDelete(false);
         setHeaderError((err as ApiError).message);
       }
@@ -178,6 +185,7 @@ function GroupBillEditor({ group, saved }: { group: GroupDetail; saved: GroupBil
   const focusErrors = useFocusFirstError(formRef);
   const guard = useUnsavedGuard(JSON.stringify(stripKeys(state)) !== snapshot);
   const showSaved = useShowSavedBill();
+  const here = useStillHere();
 
   const formMembers = current.map((m) => ({ id: m.id, name: m.name }));
   const names = memberNames(group);
@@ -227,6 +235,7 @@ function GroupBillEditor({ group, saved }: { group: GroupDetail; saved: GroupBil
         showSaved(backTo, billId);
         return 'leaving';
       } catch (err) {
+        if (!here.current) return toast(failedAfterLeaving('Bill not saved.', err), 'error');
         const e = err as ApiError;
         setErrors(toFormErrors(state, e.fields));
         setPageError(e.message);
@@ -333,7 +342,17 @@ function SettleUpEditor({ group, saved }: { group: GroupDetail; saved: SettleUpD
   const [pageError, setPageError] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
   const { busy, run } = useBusy();
+  const here = useStillHere();
+  const fromList = useFromList();
   const backTo = `/groups/${group.id}`;
+  /**
+   * Done: back to the group page it was opened from, so Back afterwards doesn't
+   * show the group twice (or a deleted payment); otherwise to its Settle-ups tab.
+   */
+  const backToGroup = () => {
+    if (fromList) void navigate(-1);
+    else void navigate(`${backTo}?tab=settle-ups`, { replace: true });
+  };
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -355,9 +374,12 @@ function SettleUpEditor({ group, saved }: { group: GroupDetail; saved: SettleUpD
         if (saved) await api.put(`/groups/${group.id}/settle-ups/${saved.id}`, body);
         else await api.post(`/groups/${group.id}/settle-ups`, body);
         toast('Payment recorded');
-        navigate(backTo);
+        // Left while it was saving: stay where they are, which reloads to include it.
+        if (!here.current) return announceChange();
+        backToGroup();
         return 'leaving';
       } catch (err) {
+        if (!here.current) return toast(failedAfterLeaving(saved ? 'Payment not saved.' : 'Payment not recorded.', err), 'error');
         const apiErr = err as ApiError;
         setErrors(apiErr.fields);
         if (!Object.keys(apiErr.fields).length) setPageError(apiErr.message);
@@ -372,9 +394,11 @@ function SettleUpEditor({ group, saved }: { group: GroupDetail; saved: SettleUpD
         await api.del(`/groups/${group.id}/settle-ups/${saved.id}`);
         setConfirmDelete(false);
         toast('Payment deleted');
-        navigate(backTo);
+        if (!here.current) return announceChange();
+        backToGroup();
         return 'leaving';
       } catch (err) {
+        if (!here.current) return toast(failedAfterLeaving('Payment not deleted.', err), 'error');
         setConfirmDelete(false);
         setPageError((err as ApiError).message);
       }

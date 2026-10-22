@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { MESSAGES } from '../shared/rules.js';
 import { ApiError } from './api.js';
 import { focusFirstError, scrollBehavior } from './billEditor.js';
 
@@ -37,8 +38,66 @@ export interface Loaded<T> {
   reload: () => Promise<void>;
 }
 
-/** Loads data for a page and lets it reload after changes. */
-export function useLoad<T>(load: () => Promise<T>, deps: unknown[]): Loaded<T> {
+/** Reloaders of pages that show bills, payments or balances (see announceChange). */
+const reloaders = new Set<() => void>();
+
+/**
+ * A save or delete finished after the person had already left its page (say,
+ * Back while it was still going): whatever they're looking at now reloads, so
+ * it includes the change.
+ */
+export function announceChange(): void {
+  for (const reload of reloaders) reload();
+}
+
+/**
+ * The corner message for a change that failed after its page was left, where its
+ * own message would never be seen, e.g. "Bill not saved. Check your connection."
+ */
+export function failedAfterLeaving(what: string, err: unknown): string {
+  const e = err instanceof ApiError ? err : new ApiError(0, MESSAGES.offline);
+  let reason: string;
+  if (e.offline || e.message === MESSAGES.offline) reason = 'Check your connection.';
+  else if (e.code === 'DB_DOWN') reason = "The app can't reach its database. Try again in a moment.";
+  else reason = Object.values(e.fields)[0] ?? e.message;
+  return `${what} ${reason}`;
+}
+
+/**
+ * Whether the person is still on this page: it's on screen, and the browser is
+ * still at its own history entry. (A link click moves the address a moment
+ * before the page is taken off screen.) False once they've left, e.g. while a
+ * save was still going.
+ */
+export function useStillHere(): { readonly current: boolean } {
+  const mounted = useRef(true);
+  const { key } = useLocation();
+  const entry = useRef(key);
+  entry.current = key;
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  return useMemo(
+    () => ({
+      get current() {
+        // React Router keeps each entry's key in history.state ("default" for the first page loaded).
+        const onEntry = ((window.history.state as { key?: string } | null)?.key ?? 'default') === entry.current;
+        return mounted.current && onEntry;
+      },
+    }),
+    [],
+  );
+}
+
+/**
+ * Loads data for a page and lets it reload after changes. With reloadOnChange,
+ * the page also reloads when a change finishes after its page was left
+ * (announceChange), so it never shows a list from before that change.
+ */
+export function useLoad<T>(load: () => Promise<T>, deps: unknown[], opts: { reloadOnChange?: boolean } = {}): Loaded<T> {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(true);
@@ -68,6 +127,16 @@ export function useLoad<T>(load: () => Promise<T>, deps: unknown[]): Loaded<T> {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
 
+  const reloadOnChange = opts.reloadOnChange ?? false;
+  useEffect(() => {
+    if (!reloadOnChange) return;
+    const onChange = () => void reload();
+    reloaders.add(onChange);
+    return () => {
+      reloaders.delete(onChange);
+    };
+  }, [reloadOnChange, reload]);
+
   return { data, error, loading, reload };
 }
 
@@ -87,8 +156,19 @@ export function useFocusFirstError(root: RefObject<HTMLElement | null>): () => v
 /** A list's "New" link passes this, so saving that bill can go back to the same list page. */
 export const FROM_LIST = { fromList: true } as const;
 
+/** This page was opened from a link that passed FROM_LIST, so it can go Back there when done. */
+export function useFromList(): boolean {
+  const location = useLocation();
+  return Boolean((location.state as { fromList?: boolean } | null)?.fromList);
+}
+
 /** A bill saved on a page that went Back to its list (history state can't carry it there). */
 let justSaved: { path: string; id: string; at: number } | null = null;
+
+/** A bill was just saved and its editor went Back to this list path, which should show it. */
+export function savedBillPending(path: string): boolean {
+  return justSaved !== null && justSaved.path === path && Date.now() - justSaved.at < 10_000;
+}
 
 /**
  * After saving a bill: show its list with the bill marked "Saved". A bill opened
@@ -97,18 +177,16 @@ let justSaved: { path: string; id: string; at: number } | null = null;
  */
 export function useShowSavedBill(): (listPath: string, billId: string) => void {
   const navigate = useNavigate();
-  const location = useLocation();
-  // If the person left while the save was still going, they've moved on: stay put.
-  const open = useRef(true);
-  useEffect(() => {
-    open.current = true;
-    return () => {
-      open.current = false;
-    };
-  }, []);
+  const fromList = useFromList();
+  const here = useStillHere();
   return (listPath, billId) => {
-    if (!open.current) return;
-    if ((location.state as { fromList?: boolean } | null)?.fromList) {
+    // If the person left while the save was still going, they've moved on: stay
+    // put, and let the page they're on reload to include the bill.
+    if (!here.current) {
+      announceChange();
+      return;
+    }
+    if (fromList) {
       justSaved = { path: listPath, id: billId, at: Date.now() };
       void navigate(-1);
     } else {
@@ -127,7 +205,7 @@ export function useSavedBill(loaded: boolean): { savedId: string | undefined; ro
   const navigate = useNavigate();
   const [savedId] = useState(() => {
     const fromState = (location.state as { savedBillId?: string } | null)?.savedBillId;
-    const wentBack = justSaved && justSaved.path === location.pathname && Date.now() - justSaved.at < 10_000 ? justSaved.id : undefined;
+    const wentBack = savedBillPending(location.pathname) ? justSaved?.id : undefined;
     return fromState ?? wentBack;
   });
   const rowRef = useRef<HTMLAnchorElement>(null);

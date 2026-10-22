@@ -6,7 +6,7 @@ import { parseHundredths } from '../../shared/money.js';
 import { ApiError, api } from '../api.js';
 import { calculate, chosenCurrency, emptyBill, focusFirstError, fromInput, rateLabels, revealResults, stripKeys, toFormErrors, toBillInput, type BillFormState, type CalcResult } from '../billEditor.js';
 import { clearFieldError, withoutKey } from '../fieldErrors.js';
-import { FROM_LIST, useBusy, useFocusFirstError, useLoad, useSavedBill, useShowSavedBill } from '../hooks.js';
+import { FROM_LIST, announceChange, failedAfterLeaving, useBusy, useFocusFirstError, useFromList, useLoad, useSavedBill, useShowSavedBill, useStillHere } from '../hooks.js';
 import { BillForm } from '../components/BillForm.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import { CurrencyPicker } from '../components/CurrencyPicker.js';
@@ -17,7 +17,7 @@ import { Alert, EmptyState, PageHeader, Skeleton, money, niceDate, usePageTitle 
 
 export function SoloListPage() {
   usePageTitle('Solo bills');
-  const { data, error, loading } = useLoad(() => api.get<{ bills: SoloBillSummary[] }>('/solo-bills'), []);
+  const { data, error, loading } = useLoad(() => api.get<{ bills: SoloBillSummary[] }>('/solo-bills'), [], { reloadOnChange: true });
   const { savedId, rowRef } = useSavedBill(data !== null);
   return (
     <>
@@ -39,6 +39,7 @@ export function SoloListPage() {
               <li key={b.id}>
                 <Link
                   to={`/solo/${b.id}`}
+                  state={FROM_LIST}
                   className={b.id === savedId ? 'link-row link-row-saved' : 'link-row'}
                   ref={b.id === savedId ? rowRef : undefined}
                 >
@@ -60,7 +61,9 @@ export function SoloListPage() {
 /** A saved solo bill, read-only: the receipt with its items, plus Edit and Delete. */
 export function SoloBillViewPage() {
   const { id } = useParams();
-  const { data, error, loading } = useLoad(() => api.get<{ bill: SoloBillDetail }>(`/solo-bills/${id}`).then((r) => r.bill), [id]);
+  const { data, error, loading } = useLoad(() => api.get<{ bill: SoloBillDetail }>(`/solo-bills/${id}`).then((r) => r.bill), [id], {
+    reloadOnChange: true,
+  });
   usePageTitle(data?.name ?? 'Solo bill');
   if (loading) return <Skeleton lines={6} />;
   if (error || !data) {
@@ -80,6 +83,8 @@ function SoloBillView({ bill }: { bill: SoloBillDetail }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [headerError, setHeaderError] = useState('');
   const { busy, run } = useBusy();
+  const here = useStillHere();
+  const fromList = useFromList();
   const items = bill.input.items.map((it, i) => ({ name: it.name || `Item ${i + 1}`, cents: parseHundredths(it.price) }));
 
   const onDelete = () =>
@@ -89,9 +94,14 @@ function SoloBillView({ bill }: { bill: SoloBillDetail }) {
         await api.del(`/solo-bills/${bill.id}`);
         setConfirmDelete(false);
         toast('Bill deleted');
-        navigate('/solo', { replace: true });
+        // Left while it was deleting: stay where they are, which reloads without it.
+        if (!here.current) return announceChange();
+        // Back to the history it was opened from, so Back afterwards doesn't show it twice.
+        if (fromList) void navigate(-1);
+        else void navigate('/solo', { replace: true });
         return 'leaving';
       } catch (err) {
+        if (!here.current) return toast(failedAfterLeaving('Bill not deleted.', err), 'error');
         setConfirmDelete(false);
         setHeaderError((err as ApiError).message);
       }
@@ -170,6 +180,7 @@ function SoloBillEditor({ saved }: { saved: SoloBillDetail | null }) {
   const focusErrors = useFocusFirstError(formRef);
   const guard = useUnsavedGuard(JSON.stringify(stripKeys(state)) !== snapshot);
   const showSaved = useShowSavedBill();
+  const here = useStillHere();
   const currency = saved ? saved.currency : chosenCurrency(state);
   const viewPath = saved ? `/solo/${saved.id}` : '/solo';
 
@@ -212,6 +223,7 @@ function SoloBillEditor({ saved }: { saved: SoloBillDetail | null }) {
         showSaved('/solo', r.bill.id);
         return 'leaving';
       } catch (err) {
+        if (!here.current) return toast(failedAfterLeaving('Bill not saved.', err), 'error');
         const e = err as ApiError;
         setErrors(toFormErrors(state, e.fields));
         setPageError(e.message);

@@ -97,9 +97,13 @@ async function closeAll(contexts: BrowserContext[]): Promise<void> {
 }
 
 async function openMembersTab(page: Page, groupId: string, groupName: string): Promise<void> {
+  // "Or add someone from your other groups" appears above the buttons once its list loads,
+  // moving them down: wait for it, so a click never lands while they move.
+  const people = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/people');
   await page.goto(`/groups/${groupId}?tab=members`);
   await expect(page.getByRole('heading', { level: 1, name: groupName })).toBeVisible();
   await expect(page.getByRole('heading', { level: 2, name: /^Members \(/ })).toBeVisible();
+  await people;
 }
 
 /** The computed background colour of the --danger variable, in the same format as getComputedStyle. */

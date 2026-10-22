@@ -165,8 +165,14 @@ export function calculate(state: BillFormState, kind: 'solo' | 'group', checkSol
   return { ok: true, result: { totals: computeTotals(checked.value), shares: null } };
 }
 
-export function canAddItem(state: BillFormState): boolean {
-  return state.items.length < MAX_ITEMS;
+/**
+ * Where "+ Add item" (or Enter after the last price) goes: 'new' for a new line;
+ * once the bill has all 200 lines, the key of the first spare empty one; or
+ * null when every line is in use.
+ */
+export function addItemTarget(state: BillFormState): 'new' | number | null {
+  if (state.items.length < MAX_ITEMS) return 'new';
+  return state.items.find((item) => isBlankItem(state, item))?.key ?? null;
 }
 
 

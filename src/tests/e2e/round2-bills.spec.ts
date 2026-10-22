@@ -2339,6 +2339,8 @@ test('US-38 leaving a new bill while its save is still going: when the save fini
   await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Dashboard' }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Leave' }).click();
   await expect(heading1(page, 'Dashboard')).toBeVisible();
+  // The Dashboard has loaded, without the bill.
+  await expect(page.getByText('No solo bills yet. Total your first bill to keep a record of it.')).toBeVisible();
 
   const saved = page.waitForResponse((r) => r.url().endsWith('/api/solo-bills') && r.request().method() === 'POST');
   release();
@@ -2347,6 +2349,8 @@ test('US-38 leaving a new bill while its save is still going: when the save fini
   await page.waitForTimeout(500);
   await expect(heading1(page, 'Dashboard')).toBeVisible();
   expect(pathname(page)).toBe('/');
+  // And the Dashboard they went to reloads to include it.
+  await expect(page.getByRole('main').getByText('Slow save')).toBeVisible();
 });
 
 test('US-05 #16 holding Enter down in the last price adds one line and does not calculate', async ({ page }, info) => {
@@ -2364,3 +2368,586 @@ test('US-05 #16 holding Enter down in the last price adds one line and does not 
   await expect(itemName(page, 2)).toBeFocused();
   await expect(grandTotal(page)).toHaveCount(0);
 });
+
+// ======================================================================
+// Final review fixes: Back after saving from any tab, changes that finish after
+// their page was left, and "+ Add item" at the 200-line limit
+// ======================================================================
+
+/**
+ * Holds requests with this method and path on their way to the server. The
+ * returned release() lets them through and waits for the server's answer.
+ */
+async function holdRequests(page: Page, method: string, path: string, opts: { fail?: boolean } = {}): Promise<() => Promise<void>> {
+  let open!: () => void;
+  const gate = new Promise<void>((resolve) => (open = resolve));
+  await page.route(`**${path}`, async (route) => {
+    if (route.request().method() !== method) return route.continue();
+    await gate;
+    // A failing one is cut off, as when the connection drops.
+    if (opts.fail) await route.abort('failed');
+    else await route.continue();
+  });
+  return async () => {
+    if (opts.fail) return open();
+    const answered = page.waitForResponse((r) => r.request().method() === method && new URL(r.url()).pathname === path);
+    open();
+    await answered;
+  };
+}
+
+/** Leaves through the sidebar's Dashboard link and waits for the Dashboard. */
+async function goToDashboard(page: Page): Promise<void> {
+  await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Dashboard' }).click();
+  await expect(heading1(page, 'Dashboard')).toBeVisible();
+}
+
+/** A group "Flat" with Ali, and a $30.00 bill I paid, split with Ali: Ali owes me $15.00. */
+async function flatWithDebt(page: Page, info: TestInfo) {
+  await signUpFast(page, info);
+  const g = await makeGroup(page, 'Flat', '$', ['Ali']);
+  const billId = await makeGroupBill(page, g.groupId, { name: 'Groceries', items: [{ price: '30' }], participantIds: [g.meId, g.ids.Ali], payerId: g.meId });
+  return { ...g, billId };
+}
+
+/** Records "Ali paid me $15.00" through the API and returns the payment's id. */
+async function recordPayment(page: Page, groupId: string, fromId: string, toId: string, amount: string): Promise<string> {
+  await api(page, 'post', `/groups/${groupId}/settle-ups`, { fromId, toId, amount });
+  const { settleUps } = await api<{ settleUps: { id: string }[] }>(page, 'get', `/groups/${groupId}/settle-ups`);
+  return settleUps[0].id;
+}
+
+test('US-18 #2 after saving a bill added from the Members tab, Back does not show the group a second time', async ({ page }, info) => {
+  await signUpFast(page, info);
+  await makeGroup(page, 'Flat', '$', ['Ali']);
+  await page.goto('/groups');
+  await page.getByRole('main').getByRole('link', { name: /^Flat/ }).first().click();
+  await expect(heading1(page, 'Flat')).toBeVisible();
+  await page.getByRole('tab', { name: 'Members' }).click();
+  await expect(page.getByRole('tab', { name: 'Members', selected: true })).toBeVisible();
+  await page.getByRole('main').getByRole('link', { name: 'Add bill' }).first().click();
+  await expect(heading1(page, 'Add bill to Flat')).toBeVisible();
+  await page.getByLabel('Bill name').fill('Pizza night');
+  await itemPrice(page, 1).fill('24');
+  await saveButton(page).click();
+
+  await expect(heading1(page, 'Flat')).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Bills', selected: true })).toBeVisible();
+  const mark = page.getByRole('tabpanel').getByRole('link', { name: /Pizza night/ }).getByText('Saved', { exact: true });
+  await expect(mark).toBeVisible();
+  await expect(mark, 'one space before the mark, with no extra gap').toHaveCSS('margin-left', '0px');
+  expect(new URL(page.url()).search, 'the address shows the Bills tab').toBe('');
+
+  // The tabs work as usual afterwards.
+  await page.getByRole('tab', { name: 'Members' }).click();
+  await expect(page.getByRole('tab', { name: 'Members', selected: true })).toBeVisible();
+  // One Back goes to the page before the group.
+  await page.goBack();
+  await expect(heading1(page, 'Groups')).toBeVisible();
+});
+
+test('US-18 #2 Back from a new bill, a switch to another tab, then Forward and Save still lands on the bill list marked "Saved"', async ({ page }, info) => {
+  await signUpFast(page, info);
+  const { groupId } = await makeGroup(page, 'Flat', '$', ['Ali']);
+  await page.goto(`/groups/${groupId}`);
+  await page.getByRole('main').getByRole('link', { name: 'Add bill' }).first().click();
+  await expect(heading1(page, 'Add bill to Flat')).toBeVisible();
+  await page.goBack();
+  await expect(heading1(page, 'Flat')).toBeVisible();
+  await page.getByRole('tab', { name: 'Members' }).click();
+  await expect(page.getByRole('tab', { name: 'Members', selected: true })).toBeVisible();
+  await page.goForward();
+  await expect(heading1(page, 'Add bill to Flat')).toBeVisible();
+  await page.getByLabel('Bill name').fill('Taxi');
+  await itemPrice(page, 1).fill('12');
+  await saveButton(page).click();
+
+  await expect(heading1(page, 'Flat')).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Bills', selected: true })).toBeVisible();
+  await expect(page.getByRole('tabpanel').getByRole('link', { name: /Taxi/ }).getByText('Saved', { exact: true })).toBeVisible();
+});
+
+test('US-37 #7 leaving a solo bill with Back while it is still saving: my history shows the bill once it is saved', async ({ page }, info) => {
+  await signUpFast(page, info);
+  await page.goto('/solo');
+  await page.getByRole('main').getByRole('link', { name: 'New solo bill' }).first().click();
+  await expect(heading1(page, 'New solo bill')).toBeVisible();
+  await page.getByLabel('Bill name').fill('Slow coffee');
+  await itemPrice(page, 1).fill('4');
+  const release = await holdRequests(page, 'POST', '/api/solo-bills');
+  await saveButton(page).click();
+  await expect(page.getByRole('button', { name: 'Saving…' })).toBeDisabled();
+
+  await page.goBack();
+  await page.getByRole('dialog').getByRole('button', { name: 'Leave' }).click();
+  await expect(heading1(page, 'Solo bills')).toBeVisible();
+  // The history has loaded, without the bill.
+  await expect(page.getByText('No solo bills yet. Total your first bill to keep a record of it.')).toBeVisible();
+
+  await release();
+  await expect(page.getByRole('link', { name: /Slow coffee/ }), 'the history reloads once it is saved').toBeVisible();
+  expect(pathname(page)).toBe('/solo');
+});
+
+test('US-37 #7 leaving a group bill with Back while it is still saving: the bill list and balances show it once it is saved', async ({ page }, info) => {
+  await signUpFast(page, info);
+  const { groupId } = await makeGroup(page, 'Flat', '$', ['Ali']);
+  await page.goto(`/groups/${groupId}`);
+  await page.getByRole('main').getByRole('link', { name: 'Add bill' }).first().click();
+  await expect(heading1(page, 'Add bill to Flat')).toBeVisible();
+  await page.getByLabel('Bill name').fill('Slow groceries');
+  await itemPrice(page, 1).fill('40');
+  const release = await holdRequests(page, 'POST', `/api/groups/${groupId}/bills`);
+  await saveButton(page).click();
+  await expect(page.getByRole('button', { name: 'Saving…' })).toBeDisabled();
+
+  await page.goBack();
+  await page.getByRole('dialog').getByRole('button', { name: 'Leave' }).click();
+  await expect(heading1(page, 'Flat')).toBeVisible();
+  // The bill list has loaded, without the bill.
+  await expect(page.getByText('No bills yet. Add the first bill you shared.')).toBeVisible();
+
+  await release();
+  await expect(page.getByRole('tabpanel').getByRole('link', { name: /Slow groceries/ }), 'the bill list reloads').toBeVisible();
+  await expect(page.getByText(/Ali pays .+ \$20\.00/), 'and so do the balances').toBeVisible();
+  expect(pathname(page)).toBe(`/groups/${groupId}`);
+});
+
+test('US-37 #7 leaving a payment while it is still being recorded: I stay where I went, and that page shows the payment', async ({ page }, info) => {
+  await signUpFast(page, info);
+  const { groupId, meId, ids } = await makeGroup(page, 'Flat', '$', ['Ali']);
+  await makeGroupBill(page, groupId, { name: 'Groceries', items: [{ price: '30' }], participantIds: [meId, ids.Ali], payerId: meId });
+  await page.goto(`/groups/${groupId}/settle-ups/new?from=${ids.Ali}&to=${meId}&amount=15`);
+  await expect(heading1(page, 'Record a payment')).toBeVisible();
+  const release = await holdRequests(page, 'POST', `/api/groups/${groupId}/settle-ups`);
+  await page.getByRole('button', { name: 'Record payment' }).click();
+
+  await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Dashboard' }).click();
+  await expect(heading1(page, 'Dashboard')).toBeVisible();
+  await expect(page.getByText('From Ali'), 'not recorded yet: Ali still owes me').toBeVisible();
+
+  await release();
+  await expect(page.getByText('From Ali'), 'the Dashboard reloads once it is recorded').toHaveCount(0);
+  await page.waitForTimeout(300);
+  expect(pathname(page), 'and I am not moved to the group').toBe('/');
+});
+
+test('US-37 #7 leaving a bill with Back while it is still being deleted: my history no longer shows it once it is deleted', async ({ page }, info) => {
+  await signUpFast(page, info);
+  const id = await makeSoloBill(page, { name: 'Old receipt', items: [{ price: '5' }] });
+  await page.goto('/solo');
+  await page.getByRole('link', { name: /Old receipt/ }).click();
+  await expect(heading1(page, 'Old receipt')).toBeVisible();
+  const release = await holdRequests(page, 'DELETE', `/api/solo-bills/${id}`);
+  await page.getByRole('button', { name: 'Delete' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Delete bill' }).click();
+
+  await page.goBack();
+  await expect(heading1(page, 'Solo bills')).toBeVisible();
+  await expect(page.getByRole('link', { name: /Old receipt/ }), 'not deleted yet').toBeVisible();
+
+  await release();
+  await expect(page.getByRole('link', { name: /Old receipt/ }), 'the history reloads once it is deleted').toHaveCount(0);
+  expect(pathname(page)).toBe('/solo');
+});
+
+test('US-25 #11 with all 200 lines on the form, "+ Add item" moves to a spare empty line instead of saying the bill is full', async ({ page }, info) => {
+  await signUpFast(page, info);
+  const items = Array.from({ length: 199 }, (_, i) => ({ name: `Thing ${i + 1}`, price: '1' }));
+  const id = await makeSoloBill(page, { name: 'Big shop', items });
+  await page.goto(`/solo/${id}/edit`);
+  await expect(removeButtons(page)).toHaveCount(199);
+
+  // The 200th line, empty.
+  await addItem(page).click();
+  await expect(removeButtons(page)).toHaveCount(200);
+  await expect(itemName(page, 200)).toBeFocused();
+  // Empty another line higher up: "+ Add item" goes to the first empty line.
+  await itemName(page, 5).fill('');
+  await itemPrice(page, 5).fill('');
+  await addItem(page).click();
+  await expect(itemName(page, 5)).toBeFocused();
+  await expect(page.getByText(TOO_MANY, { exact: true })).toHaveCount(0);
+  await expect(removeButtons(page)).toHaveCount(200);
+
+  // Once every line is in use, the bill is full.
+  for (const n of [5, 200]) {
+    await itemName(page, n).fill(`Extra ${n}`);
+    await itemPrice(page, n).fill('2');
+  }
+  await addItem(page).click();
+  await expect(page.getByText(TOO_MANY, { exact: true })).toBeVisible();
+  await expect(removeButtons(page)).toHaveCount(200);
+});
+
+const TOO_MANY = 'A bill can have at most 200 items';
+
+test('US-37 #7 leaving a group bill while it is still being deleted: I stay on the Dashboard, which updates', async ({ page }, info) => {
+  const { groupId, billId } = await flatWithDebt(page, info);
+  await page.goto(`/groups/${groupId}/bills/${billId}`);
+  await expect(heading1(page, 'Groceries')).toBeVisible();
+  const release = await holdRequests(page, 'DELETE', `/api/groups/${groupId}/bills/${billId}`);
+  await page.getByRole('button', { name: 'Delete' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Delete bill' }).click();
+  // Cancel stays pressable while it deletes; then the sidebar.
+  await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click();
+  await goToDashboard(page);
+  await expect(page.getByText('From Ali'), 'not deleted yet').toBeVisible();
+
+  await release();
+  await expect(page.getByText('From Ali'), 'the Dashboard reloads once it is deleted').toHaveCount(0);
+  await page.waitForTimeout(300);
+  expect(pathname(page), 'and I am not moved to the group').toBe('/');
+});
+
+test('US-37 #7 leaving a payment while it is still being changed or deleted: I stay on the Dashboard, which updates', async ({ page }, info) => {
+  const { groupId, meId, ids } = await flatWithDebt(page, info);
+  const paymentId = await recordPayment(page, groupId, ids.Ali, meId, '5');
+
+  // Change it to the full $15.00, and leave while it saves.
+  await page.goto(`/groups/${groupId}/settle-ups/${paymentId}`);
+  await expect(heading1(page, 'Payment')).toBeVisible();
+  const saving = await holdRequests(page, 'PUT', `/api/groups/${groupId}/settle-ups/${paymentId}`);
+  await page.getByLabel('Amount ($)').fill('15');
+  await page.getByRole('button', { name: 'Save payment' }).click();
+  await goToDashboard(page);
+  await expect(page.getByText('From Ali'), 'not changed yet: Ali still owes $10.00').toBeVisible();
+  await saving();
+  await expect(page.getByText('From Ali'), 'the Dashboard reloads once it is saved').toHaveCount(0);
+  await page.waitForTimeout(300);
+  expect(pathname(page)).toBe('/');
+
+  // Delete it, and leave while it deletes.
+  await page.goto(`/groups/${groupId}/settle-ups/${paymentId}`);
+  await expect(heading1(page, 'Payment')).toBeVisible();
+  const deleting = await holdRequests(page, 'DELETE', `/api/groups/${groupId}/settle-ups/${paymentId}`);
+  await page.getByRole('button', { name: 'Delete' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: /^Delete/ }).last().click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click();
+  await goToDashboard(page);
+  await expect(page.getByText('You owe nothing and are owed nothing.'), 'loaded, and not deleted yet: nobody owes anything').toBeVisible();
+  await deleting();
+  await expect(page.getByText('From Ali'), 'the Dashboard reloads: Ali owes $15.00 again').toBeVisible();
+  await page.waitForTimeout(300);
+  expect(pathname(page)).toBe('/');
+});
+
+test('US-37 #7 leaving a solo bill while it is still being deleted through the sidebar: I stay on the Dashboard, which updates', async ({ page }, info) => {
+  await signUpFast(page, info);
+  const id = await makeSoloBill(page, { name: 'Old receipt', items: [{ price: '5' }] });
+  await page.goto(`/solo/${id}`);
+  await expect(heading1(page, 'Old receipt')).toBeVisible();
+  const release = await holdRequests(page, 'DELETE', `/api/solo-bills/${id}`);
+  await page.getByRole('button', { name: 'Delete' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Delete bill' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click();
+  await goToDashboard(page);
+  await expect(page.getByRole('main').getByText('Old receipt'), 'not deleted yet').toBeVisible();
+  await release();
+  await expect(page.getByRole('main').getByText('Old receipt'), 'the Dashboard reloads once it is deleted').toHaveCount(0);
+  await page.waitForTimeout(300);
+  expect(pathname(page)).toBe('/');
+});
+
+test('US-37 #7 leaving an edited solo bill with Back while it is still saving: the bill I went back to shows the new total', async ({ page }, info) => {
+  await signUpFast(page, info);
+  const id = await makeSoloBill(page, { name: 'Lunch', items: [{ price: '10' }] });
+  await page.goto('/solo');
+  await page.getByRole('link', { name: /Lunch/ }).click();
+  await expect(heading1(page, 'Lunch')).toBeVisible();
+  await page.getByRole('link', { name: 'Edit bill' }).click();
+  await itemPrice(page, 1).fill('25');
+  const release = await holdRequests(page, 'PUT', `/api/solo-bills/${id}`);
+  await saveButton(page).click();
+  await page.goBack();
+  await page.getByRole('dialog').getByRole('button', { name: 'Leave' }).click();
+  await expect(heading1(page, 'Lunch')).toBeVisible();
+  await expect(grandTotal(page)).toHaveText('$10.00');
+  await release();
+  await expect(grandTotal(page), 'the receipt reloads once it is saved').toHaveText('$25.00');
+  expect(pathname(page)).toBe(`/solo/${id}`);
+});
+
+test('US-37 #7 leaving a payment with Back while it is still being recorded: the Settle-ups tab I went back to shows it', async ({ page }, info) => {
+  const { groupId } = await flatWithDebt(page, info);
+  await page.goto(`/groups/${groupId}?tab=settle-ups`);
+  await expect(page.getByText('No settle-ups yet.', { exact: false })).toBeVisible();
+  await page.getByRole('link', { name: 'Record a payment' }).click();
+  await expect(heading1(page, 'Record a payment')).toBeVisible();
+  await page.getByLabel('Who paid').selectOption({ label: 'Ali' });
+  await page.getByLabel('Who received it').selectOption({ index: 1 });
+  await page.getByLabel('Amount ($)').fill('15');
+  const release = await holdRequests(page, 'POST', `/api/groups/${groupId}/settle-ups`);
+  await page.getByRole('button', { name: 'Record payment' }).click();
+  await page.goBack();
+  await expect(page.getByRole('tab', { name: 'Settle-ups', selected: true })).toBeVisible();
+  await expect(page.getByText('No settle-ups yet.', { exact: false })).toBeVisible();
+  await release();
+  await expect(page.getByRole('tabpanel').getByRole('link', { name: /Ali paid/ }), 'the Settle-ups tab reloads').toBeVisible();
+  await expect(page.getByText('Everyone is settled up.'), 'and so do the balances').toBeVisible();
+});
+
+test('US-37 #7 a payment that fails after I left its page says so in a red corner message', async ({ page }, info) => {
+  const { groupId, meId, ids } = await flatWithDebt(page, info);
+  await page.goto(`/groups/${groupId}/settle-ups/new?from=${ids.Ali}&to=${meId}&amount=15`);
+  await expect(heading1(page, 'Record a payment')).toBeVisible();
+  const release = await holdRequests(page, 'POST', `/api/groups/${groupId}/settle-ups`, { fail: true });
+  await page.getByRole('button', { name: 'Record payment' }).click();
+  await goToDashboard(page);
+  await release();
+  const message = page.getByRole('status').getByText('Payment not recorded. Check your connection.');
+  await expect(message).toBeVisible();
+  await expect(page.locator('.toast-error')).toHaveCount(1);
+  expect(pathname(page)).toBe('/');
+  await expect(page.getByText('From Ali'), 'nothing changed').toBeVisible();
+});
+
+test('US-37 #7 creating, editing or leaving a group, then leaving the page while it saves: I stay where I went, and it updates', async ({ page }, info) => {
+  await signUpFast(page, info);
+  // Create, then Back to the Groups list while it's creating.
+  await page.goto('/groups');
+  await expect(page.getByText('No groups yet.', { exact: false })).toBeVisible();
+  await page.getByRole('main').getByRole('link', { name: 'Create group' }).first().click();
+  await page.getByLabel('Group name').fill('Trip');
+  const creating = await holdRequests(page, 'POST', '/api/groups');
+  await page.getByRole('button', { name: 'Create group' }).click();
+  await page.goBack();
+  await expect(heading1(page, 'Groups')).toBeVisible();
+  await expect(page.getByText('No groups yet.', { exact: false })).toBeVisible();
+  await creating();
+  await expect(page.getByRole('main').getByRole('link', { name: /^Trip/ }), 'the Groups list reloads').toBeVisible();
+  expect(pathname(page)).toBe('/groups');
+
+  // Edit, then Back to the group while it saves.
+  await page.getByRole('main').getByRole('link', { name: /^Trip/ }).click();
+  await expect(heading1(page, 'Trip')).toBeVisible();
+  const groupPath = pathname(page);
+  await page.getByRole('link', { name: 'Edit group' }).click();
+  await page.getByLabel('Group name').fill('Road trip');
+  const editing = await holdRequests(page, 'PUT', `/api${groupPath}`);
+  await page.getByRole('button', { name: 'Save changes' }).click();
+  await page.goBack();
+  await expect(heading1(page, 'Trip')).toBeVisible();
+  await editing();
+  await expect(heading1(page, 'Road trip'), 'the group page reloads').toBeVisible();
+  expect(pathname(page)).toBe(groupPath);
+
+  // Leave the group, then go to the Groups list while it's leaving.
+  await page.getByRole('tab', { name: 'Members' }).click();
+  const leaving = await holdRequests(page, 'POST', `/api${groupPath}/leave`);
+  await page.getByRole('button', { name: 'Leave group' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: /^Leave/ }).last().click();
+  await page.getByRole('dialog').getByRole('button', { name: /Cancel|Stay/ }).click();
+  await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Groups' }).click();
+  await expect(page.getByRole('main').getByRole('link', { name: /^Road trip/ }), 'not left yet').toBeVisible();
+  await leaving();
+  await expect(page.getByRole('main').getByRole('link', { name: /^Road trip/ }), 'the Groups list reloads').toHaveCount(0);
+  await page.waitForTimeout(300);
+  expect(pathname(page)).toBe('/groups');
+});
+
+test('US-17 #7 and US-18 #6 recording or deleting a payment from the Settle-ups tab goes back to it, and Back does not show the group twice or the deleted payment', async ({ page }, info) => {
+  const { groupId } = await flatWithDebt(page, info);
+  await page.goto('/groups');
+  await page.getByRole('main').getByRole('link', { name: /^Flat/ }).first().click();
+  await page.getByRole('tab', { name: 'Settle-ups' }).click();
+  await page.getByRole('link', { name: 'Record a payment' }).click();
+  await page.getByLabel('Who paid').selectOption({ label: 'Ali' });
+  await page.getByLabel('Who received it').selectOption({ index: 1 });
+  await page.getByLabel('Amount ($)').fill('15');
+  await page.getByRole('button', { name: 'Record payment' }).click();
+  await expect(page.getByRole('tab', { name: 'Settle-ups', selected: true }), 'back on the Settle-ups tab').toBeVisible();
+  const row = page.getByRole('tabpanel').getByRole('link', { name: /Ali paid/ });
+  await expect(row).toBeVisible();
+
+  // Delete it from there.
+  await row.click();
+  await expect(heading1(page, 'Payment')).toBeVisible();
+  await page.getByRole('button', { name: 'Delete' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: /^Delete/ }).last().click();
+  await expect(page.getByRole('tab', { name: 'Settle-ups', selected: true })).toBeVisible();
+  await expect(page.getByText('No settle-ups yet.', { exact: false }), 'the tab shows the change').toBeVisible();
+  await expect(row, 'gone from the list').toHaveCount(0);
+  expect(pathname(page)).toBe(`/groups/${groupId}`);
+
+  // One Back: the page before the group, never the deleted payment or the group again.
+  await page.goBack();
+  await expect(heading1(page, 'Groups')).toBeVisible();
+});
+
+test('US-39 #1 saving "Edit group" goes back to the group, and Back does not show the group a second time', async ({ page }, info) => {
+  await signUpFast(page, info);
+  await makeGroup(page, 'Flat', '$', ['Ali']);
+  await page.goto('/groups');
+  await page.getByRole('main').getByRole('link', { name: /^Flat/ }).first().click();
+  await page.getByRole('link', { name: 'Edit group' }).click();
+  await page.getByLabel('Group name').fill('Flat 4B');
+  await page.getByRole('button', { name: 'Save changes' }).click();
+  await expect(heading1(page, 'Flat 4B')).toBeVisible();
+  await page.goBack();
+  await expect(heading1(page, 'Groups')).toBeVisible();
+});
+
+// ----- Second review: suggestions, edits, failures, tab switches, the skip link, deletes -----
+
+test('US-17 #7 "Record this payment" on the Bills tab goes back to the Bills tab, and Back does not show the group twice', async ({ page }, info) => {
+  await flatWithDebt(page, info);
+  await page.goto('/groups');
+  await page.getByRole('main').getByRole('link', { name: /^Flat/ }).first().click();
+  await expect(heading1(page, 'Flat')).toBeVisible();
+  await page.getByRole('link', { name: 'Record this payment' }).click();
+  await expect(heading1(page, 'Record a payment')).toBeVisible();
+  await page.getByRole('button', { name: 'Record payment' }).click();
+  await expect(page.getByRole('tab', { name: 'Bills', selected: true })).toBeVisible();
+  await expect(page.getByText('Everyone is settled up.')).toBeVisible();
+  await page.goBack();
+  await expect(heading1(page, 'Groups')).toBeVisible();
+});
+
+test('US-18 #6 saving a payment opened from the Settle-ups tab goes back to the tab, which shows the new amount', async ({ page }, info) => {
+  const { groupId, meId, ids } = await flatWithDebt(page, info);
+  await recordPayment(page, groupId, ids.Ali, meId, '5');
+  await page.goto('/groups');
+  await page.getByRole('main').getByRole('link', { name: /^Flat/ }).first().click();
+  await page.getByRole('tab', { name: 'Settle-ups' }).click();
+  await page.getByRole('tabpanel').getByRole('link', { name: /Ali paid/ }).click();
+  await expect(heading1(page, 'Payment')).toBeVisible();
+  await page.getByLabel('Amount ($)').fill('15');
+  await page.getByRole('button', { name: 'Save payment' }).click();
+  await expect(page.getByRole('tab', { name: 'Settle-ups', selected: true })).toBeVisible();
+  await expect(page.getByRole('tabpanel').getByRole('link', { name: /Ali paid/ })).toContainText('$15.00');
+  await page.goBack();
+  await expect(heading1(page, 'Groups')).toBeVisible();
+});
+
+test('US-37 #7 a bill that fails to save after I left its page says so in a red corner message', async ({ page }, info) => {
+  await signUpFast(page, info);
+  await openNewSolo(page);
+  await page.getByLabel('Bill name').fill('Lost lunch');
+  await itemPrice(page, 1).fill('8');
+  const release = await holdRequests(page, 'POST', '/api/solo-bills', { fail: true });
+  await saveButton(page).click();
+  await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Dashboard' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Leave' }).click();
+  await expect(heading1(page, 'Dashboard')).toBeVisible();
+  await release();
+  await expect(page.getByRole('status').getByText('Bill not saved. Check your connection.')).toBeVisible();
+  expect(pathname(page)).toBe('/');
+});
+
+test('US-37 #7 removing a member, then switching tab while it is still going: a failure is shown in a red corner message', async ({ page }, info) => {
+  await signUpFast(page, info);
+  const { groupId, ids } = await makeGroup(page, 'Flat', '$', ['Ali']);
+  await page.goto(`/groups/${groupId}?tab=members`);
+  const aliId = ids.Ali;
+  const failing = await holdRequests(page, 'POST', `/api/groups/${groupId}/members/${aliId}/remove`, { fail: true });
+  await page.getByRole('button', { name: 'Remove Ali' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Remove member' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: /Cancel|Stay/ }).click();
+  await page.getByRole('tab', { name: 'Bills' }).click();
+  await failing();
+  await expect(page.getByRole('status').getByText("Ali wasn't removed. Check your connection.")).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Bills', selected: true }), 'I stay on the tab I chose').toBeVisible();
+});
+
+test('US-21 leaving a group, then switching tab while it is still going, still takes me to my groups', async ({ page }, info) => {
+  await signUpFast(page, info);
+  const { groupId } = await makeGroup(page, 'Flat', '$', ['Ali']);
+  await page.goto(`/groups/${groupId}?tab=members`);
+  const release = await holdRequests(page, 'POST', `/api/groups/${groupId}/leave`);
+  await page.getByRole('button', { name: 'Leave group' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: /^Leave/ }).last().click();
+  await page.getByRole('dialog').getByRole('button', { name: /Cancel|Stay/ }).click();
+  await page.getByRole('tab', { name: 'Bills' }).click();
+  await release();
+  await expect(heading1(page, 'Groups')).toBeVisible();
+  expect(pathname(page)).toBe('/groups');
+  await expect(page.getByRole('main').getByRole('link', { name: /^Flat/ })).toHaveCount(0);
+});
+
+test('US-36 the "Skip to content" link moves the cursor without a history entry, so Back after saving still works', async ({ page }, info) => {
+  await flatWithDebt(page, info);
+  await page.goto('/groups');
+  await page.getByRole('main').getByRole('link', { name: /^Flat/ }).first().click();
+  await page.getByRole('tab', { name: 'Settle-ups' }).click();
+  await page.getByRole('link', { name: 'Record a payment' }).click();
+  await expect(heading1(page, 'Record a payment')).toBeVisible();
+  const before = await page.evaluate(() => window.history.length);
+  await page.getByRole('link', { name: 'Skip to content' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('main#main')).toBeFocused();
+  expect(page.url()).not.toContain('#main');
+  expect(await page.evaluate(() => window.history.length), 'no new history entry').toBe(before);
+
+  await page.getByLabel('Who paid').selectOption({ label: 'Ali' });
+  await page.getByLabel('Who received it').selectOption({ index: 1 });
+  await page.getByLabel('Amount ($)').fill('15');
+  await page.getByRole('button', { name: 'Record payment' }).click();
+  await expect(page.getByRole('tab', { name: 'Settle-ups', selected: true })).toBeVisible();
+  await page.goBack();
+  await expect(heading1(page, 'Groups'), 'not the payment form again').toBeVisible();
+});
+
+test('US-08 #6 and US-18 #4 deleting a bill opened from its list goes back to the list, and Back does not show it twice', async ({ page }, info) => {
+  await flatWithDebt(page, info);
+  await page.goto('/groups');
+  await page.getByRole('main').getByRole('link', { name: /^Flat/ }).first().click();
+  await page.getByRole('tabpanel').getByRole('link', { name: /Groceries/ }).click();
+  await page.getByRole('button', { name: 'Delete' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Delete bill' }).click();
+  await expect(heading1(page, 'Flat')).toBeVisible();
+  await expect(page.getByText('No bills yet. Add the first bill you shared.')).toBeVisible();
+  await page.goBack();
+  await expect(heading1(page, 'Groups'), 'Back: the page before the group').toBeVisible();
+
+  await makeSoloBill(page, { name: 'Old receipt', items: [{ price: '5' }] });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Solo bills' }).click();
+  await page.getByRole('link', { name: /Old receipt/ }).click();
+  await page.getByRole('button', { name: 'Delete' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Delete bill' }).click();
+  await expect(heading1(page, 'Solo bills')).toBeVisible();
+  await expect(page.getByText('No solo bills yet. Total your first bill to keep a record of it.')).toBeVisible();
+  await page.goBack();
+  await expect(heading1(page, 'Dashboard'), 'Back: the page before the history').toBeVisible();
+});
+
+test('US-37 #7 creating a group from "New group bill", then Back while it is creating: the page updates to offer it', async ({ page }, info) => {
+  await signUpFast(page, info);
+  await page.getByRole('main').getByRole('link', { name: 'New group bill' }).first().click();
+  await expect(heading1(page, 'New group bill')).toBeVisible();
+  await expect(page.getByText('Group bills belong to a group.', { exact: false })).toBeVisible();
+  await page.getByRole('main').getByRole('link', { name: 'Create group' }).click();
+  await page.getByLabel('Group name').fill('Trip');
+  const release = await holdRequests(page, 'POST', '/api/groups');
+  await page.getByRole('button', { name: 'Create group' }).click();
+  await page.goBack();
+  await expect(heading1(page, 'New group bill')).toBeVisible();
+  await expect(page.getByText('Group bills belong to a group.', { exact: false })).toBeVisible();
+  await release();
+  await expect(page.getByRole('main').getByRole('link', { name: /Trip/ }), 'the page reloads to offer the new group').toBeVisible();
+  expect(pathname(page)).toBe('/group-bill/new');
+});
+
+test('US-37 #7 joining with an invite, then Back while it is joining: I stay where I went', async ({ page }, info) => {
+  await signUpFast(page, info, 'a');
+  const { groupId } = await makeGroup(page, 'Flat', '$', ['Omar']);
+  const { group } = await api<{ group: { members: { name: string; inviteCode: string | null }[] } }>(page, 'get', `/groups/${groupId}`);
+  const code = group.members.find((m) => m.name === 'Omar')!.inviteCode!;
+  await api(page, 'post', '/auth/logout');
+  await signUpFast(page, info, 'b');
+
+  await page.goto('/join');
+  await page.getByLabel('Invite code').fill(code);
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await expect(page.getByRole('button', { name: 'Join these groups' })).toBeVisible();
+  const release = await holdRequests(page, 'POST', `/api/invites/${code}/accept`);
+  await page.getByRole('button', { name: 'Join these groups' }).click();
+  await page.goBack();
+  await expect(heading1(page, 'Use an invite code')).toBeVisible();
+  await release();
+  await expect(page.getByRole('status').getByText('You joined 1 group.')).toBeVisible();
+  await page.waitForTimeout(300);
+  expect(pathname(page), 'not moved to the Dashboard').toBe('/join');
+});
+

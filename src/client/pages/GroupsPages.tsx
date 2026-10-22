@@ -4,14 +4,14 @@ import type { GroupDetail, GroupSummary } from '../../shared/api.js';
 import { CURRENCIES, checkCurrency, checkGroupName, normalizeInviteCode } from '../../shared/rules.js';
 import { ApiError, api } from '../api.js';
 import { withoutKey } from '../fieldErrors.js';
-import { useBusy, useLoad } from '../hooks.js';
+import { announceChange, failedAfterLeaving, useBusy, useFromList, useLoad, useStillHere } from '../hooks.js';
 import { CurrencyPicker } from '../components/CurrencyPicker.js';
 import { useToast } from '../components/Toasts.js';
 import { Alert, Balance, EmptyState, PageHeader, Skeleton, TextField, usePageTitle } from '../components/ui.js';
 
 export function GroupsPage() {
   usePageTitle('Groups');
-  const { data, error, loading } = useLoad(() => api.get<{ groups: GroupSummary[] }>('/groups'), []);
+  const { data, error, loading } = useLoad(() => api.get<{ groups: GroupSummary[] }>('/groups'), [], { reloadOnChange: true });
   return (
     <>
       <PageHeader title="Groups">
@@ -57,6 +57,7 @@ export function NewGroupPage() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
   const { busy, run } = useBusy();
+  const here = useStillHere();
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -73,9 +74,12 @@ export function NewGroupPage() {
       try {
         const r = await api.post<{ groupId: string }>('/groups', { name, currency });
         toast('Group created');
+        // Left the page meanwhile: stay where they are, which reloads to include it.
+        if (!here.current) return announceChange();
         navigate(`/groups/${r.groupId}`, { replace: true });
         return 'leaving';
       } catch (err) {
+        if (!here.current) return toast(failedAfterLeaving('Group not created.', err), 'error');
         const apiErr = err as ApiError;
         setErrors(apiErr.fields);
         if (!Object.keys(apiErr.fields).length) setError(apiErr.message);
@@ -170,7 +174,7 @@ export function JoinPage() {
 /** "New group bill" from the Dashboard: pick which group it belongs to. */
 export function ChooseGroupPage() {
   usePageTitle('New group bill');
-  const { data, error, loading } = useLoad(() => api.get<{ groups: GroupSummary[] }>('/groups'), []);
+  const { data, error, loading } = useLoad(() => api.get<{ groups: GroupSummary[] }>('/groups'), [], { reloadOnChange: true });
   return (
     <>
       <PageHeader title="New group bill" back={{ to: '/', label: 'Dashboard' }} />
@@ -229,6 +233,8 @@ function EditGroupForm({ group }: { group: GroupDetail }) {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
   const { busy, run } = useBusy();
+  const here = useStillHere();
+  const fromList = useFromList();
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -245,9 +251,13 @@ function EditGroupForm({ group }: { group: GroupDetail }) {
       try {
         await api.put(`/groups/${group.id}`, { name, currency });
         toast('Group saved');
-        navigate(`/groups/${group.id}`);
+        if (!here.current) return announceChange();
+        // Back to the group page it was opened from, so Back afterwards doesn't show it twice.
+        if (fromList) void navigate(-1);
+        else void navigate(`/groups/${group.id}`, { replace: true });
         return 'leaving';
       } catch (err) {
+        if (!here.current) return toast(failedAfterLeaving('Group not saved.', err), 'error');
         const apiErr = err as ApiError;
         setErrors(apiErr.fields);
         if (!Object.keys(apiErr.fields).length) setError(apiErr.message);

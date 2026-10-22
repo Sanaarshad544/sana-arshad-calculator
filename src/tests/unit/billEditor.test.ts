@@ -2,7 +2,7 @@
 // messages about items still point at the right line on the form.
 import { describe, expect, it } from 'vitest';
 import { MESSAGES } from '../../shared/rules.js';
-import { calculate, emptyBill, newItem, rateLabels, stripKeys, toBillInput, toFormErrors, toGroupBillInput } from '../../client/billEditor.js';
+import { addItemTarget, calculate, emptyBill, newItem, rateLabels, stripKeys, toBillInput, toFormErrors, toGroupBillInput } from '../../client/billEditor.js';
 
 const bill = (items: { name: string; price: string }[]) => emptyBill({ items: items.map((it) => newItem(it)) });
 
@@ -87,5 +87,34 @@ describe('US-14 #12 and US-26 #10 group lines, sharers and rates', () => {
     );
     expect(rates).toEqual({ tax: '', other: '', tip: '(15% of items)' });
     expect(rateLabels(emptyBill()).tax).toBe('');
+  });
+});
+
+describe('US-25 #11 "+ Add item" at the 200-line limit', () => {
+  /** A bill with n lines; the lines at the given positions are left empty. */
+  const lines = (n: number, empty: number[] = []) =>
+    emptyBill({ items: Array.from({ length: n }, (_, i) => newItem(empty.includes(i) ? {} : { name: `Thing ${i + 1}`, price: '1' })) });
+
+  it('adds a new line while the bill has fewer than 200 lines, even with empty ones', () => {
+    expect(addItemTarget(lines(199))).toBe('new');
+    expect(addItemTarget(lines(199, [3]))).toBe('new');
+  });
+
+  it('with 200 lines, goes to the first empty line instead', () => {
+    const state = lines(200, [150, 7]);
+    expect(addItemTarget(state)).toBe(state.items[7].key);
+  });
+
+  it('with 200 lines all in use, there is nowhere to go', () => {
+    expect(addItemTarget(lines(200))).toBeNull();
+  });
+
+  it('split by items, a line with only people ticked is in use', () => {
+    const state = lines(200, [10]);
+    const ticked = { ...state, splitMode: 'itemized' as const, participantIds: ['1'] };
+    ticked.items = ticked.items.map((item, i) => (i === 10 ? { ...item, sharerIds: ['1'] } : item));
+    expect(addItemTarget(ticked)).toBeNull();
+    // Someone ticked who isn't on the bill doesn't count.
+    expect(addItemTarget({ ...ticked, participantIds: [] })).toBe(ticked.items[10].key);
   });
 });

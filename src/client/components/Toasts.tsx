@@ -1,21 +1,29 @@
 import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from 'react';
 
+type ToastKind = 'done' | 'error';
+
 interface Toast {
   id: number;
   text: string;
+  kind: ToastKind;
 }
 
-const ToastContext = createContext<(text: string) => void>(() => {});
+type ShowToast = (text: string, kind?: ToastKind) => void;
 
-/** Short success messages in the corner that disappear after 5 seconds. */
+const ToastContext = createContext<ShowToast>(() => {});
+
+/**
+ * Short messages in the corner: what just happened (gone after 5 seconds), or,
+ * in red, a change that failed after its page was left (gone after 10 seconds).
+ */
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const next = useRef(1);
 
-  const show = useCallback((text: string) => {
+  const show = useCallback<ShowToast>((text, kind = 'done') => {
     const id = next.current++;
-    setToasts((list) => [...list, { id, text }]);
-    window.setTimeout(() => setToasts((list) => list.filter((t) => t.id !== id)), 5000);
+    setToasts((list) => [...list, { id, text, kind }]);
+    window.setTimeout(() => setToasts((list) => list.filter((t) => t.id !== id)), kind === 'error' ? 10_000 : 5000);
   }, []);
 
   return (
@@ -23,8 +31,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       {children}
       <div className="toasts" role="status" aria-live="polite">
         {toasts.map((t) => (
-          <div key={t.id} className="toast">
-            <span aria-hidden="true" className="toast-icon">✓</span> {t.text}
+          <div key={t.id} className={t.kind === 'error' ? 'toast toast-error' : 'toast'}>
+            <span aria-hidden="true" className="toast-icon">
+              {t.kind === 'error' ? '!' : '✓'}
+            </span>{' '}
+            {t.text}
           </div>
         ))}
       </div>
@@ -32,6 +43,6 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   );
 }
 
-export function useToast(): (text: string) => void {
+export function useToast(): ShowToast {
   return useContext(ToastContext);
 }

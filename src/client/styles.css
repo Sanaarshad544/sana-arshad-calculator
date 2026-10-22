@@ -1332,8 +1332,9 @@ fieldset {
   background: var(--accent-soft);
 }
 
+/* A space already separates it from the bill name. */
 .link-row .badge-saved {
-  margin-left: 4px;
+  margin-left: 0;
   background: var(--accent);
   color: var(--on-accent);
 }
@@ -1644,6 +1645,11 @@ fieldset {
 
 .toast-icon {
   color: var(--bg);
+}
+
+/* A change that failed after its page was left. */
+.toast-error {
+  background: var(--danger);
 }
 
 @keyframes toast-in {

@@ -43,7 +43,7 @@ function TotalsCard({ title, totals, tone, none, debts }: { title: string; total
 
 export function DashboardPage() {
   usePageTitle('Dashboard');
-  const { data, error, loading } = useLoad(() => api.get<DashboardDto>('/dashboard'), []);
+  const { data, error, loading } = useLoad(() => api.get<DashboardDto>('/dashboard'), [], { reloadOnChange: true });
 
   return (
     <>

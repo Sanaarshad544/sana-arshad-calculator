@@ -87,7 +87,15 @@ export function AppLayout() {
 
   return (
     <div className="app">
-      <a href="#main" className="skip-link">
+      <a
+        href="#main"
+        className="skip-link"
+        onClick={(e) => {
+          // Just move the cursor: following "#main" would add a history entry.
+          e.preventDefault();
+          mainRef.current?.focus();
+        }}
+      >
         Skip to content
       </a>
       <aside className="sidebar">

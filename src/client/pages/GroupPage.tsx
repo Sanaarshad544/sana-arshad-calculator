@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import type { ActivityDto, GroupBillSummary, GroupDetail, MemberDto, PersonOption, SettleUpDto } from '../../shared/api.js';
 import { centsToInput } from '../../shared/money.js';
 import { MESSAGES, checkMemberName, inviteCodeGroups } from '../../shared/rules.js';
 import { ApiError, api } from '../api.js';
-import { FROM_LIST, useBusy, useLoad, useSavedBill } from '../hooks.js';
+import { FROM_LIST, announceChange, failedAfterLeaving, savedBillPending, useBusy, useLoad, useSavedBill, useStillHere } from '../hooks.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import { CurrencyNote } from '../components/CurrencyNote.js';
 import { useToast } from '../components/Toasts.js';
@@ -23,10 +23,22 @@ export function GroupPage() {
   const { data, error, loading, reload } = useLoad(
     () => api.get<{ group: GroupDetail }>(`/groups/${groupId}`).then((r) => r.group),
     [groupId],
+    { reloadOnChange: true },
   );
   usePageTitle(data?.name ?? 'Group');
+  const location = useLocation();
   const [params, setParams] = useSearchParams();
-  const tab = (TABS.find((t) => t.id === params.get('tab'))?.id ?? 'bills') as TabId;
+  // Back here from a bill just saved: show it on the Bills tab, whichever tab was open before.
+  const [cameBackSaved, setCameBackSaved] = useState(() => savedBillPending(location.pathname));
+  const askedTab = cameBackSaved ? null : params.get('tab');
+  const tab = (TABS.find((t) => t.id === askedTab)?.id ?? 'bills') as TabId;
+  useEffect(() => {
+    if (!cameBackSaved) return;
+    if (params.get('tab')) setParams({}, { replace: true });
+    setCameBackSaved(false);
+    // Once, on arrival; after that the tabs work as usual.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   if (loading) return <Skeleton lines={6} />;
@@ -65,10 +77,10 @@ export function GroupPage() {
   return (
     <>
       <PageHeader title={group.name} back={{ to: '/groups', label: 'Groups' }}>
-        <Link className="btn btn-secondary" to={`/groups/${group.id}/edit`}>
+        <Link className="btn btn-secondary" to={`/groups/${group.id}/edit`} state={FROM_LIST}>
           Edit group
         </Link>
-        <Link className="btn btn-primary" to={`/groups/${group.id}/bills/new`} state={tab === 'bills' ? FROM_LIST : undefined}>
+        <Link className="btn btn-primary" to={`/groups/${group.id}/bills/new`} state={FROM_LIST}>
           Add bill
         </Link>
       </PageHeader>
@@ -110,6 +122,7 @@ export function GroupPage() {
                   <Link
                     className="btn btn-secondary btn-small"
                     to={`/groups/${group.id}/settle-ups/new?from=${s.fromId}&to=${s.toId}&amount=${centsToInput(s.amountCents)}`}
+                    state={FROM_LIST}
                   >
                     Record this payment
                   </Link>
@@ -151,7 +164,9 @@ export function GroupPage() {
 }
 
 function BillsTab({ group, names }: { group: GroupDetail; names: Map<string, string> }) {
-  const { data, error, loading } = useLoad(() => api.get<{ bills: GroupBillSummary[] }>(`/groups/${group.id}/bills`), [group.id]);
+  const { data, error, loading } = useLoad(() => api.get<{ bills: GroupBillSummary[] }>(`/groups/${group.id}/bills`), [group.id], {
+    reloadOnChange: true,
+  });
   const { savedId, rowRef } = useSavedBill(data !== null);
   if (loading) return <Skeleton lines={3} />;
   if (error) return <Alert>{error.message}</Alert>;
@@ -164,6 +179,7 @@ function BillsTab({ group, names }: { group: GroupDetail; names: Map<string, str
         <li key={b.id}>
           <Link
             to={`/groups/${group.id}/bills/${b.id}`}
+            state={FROM_LIST}
             className={b.id === savedId ? 'link-row link-row-saved' : 'link-row'}
             ref={b.id === savedId ? rowRef : undefined}
           >
@@ -185,13 +201,15 @@ function BillsTab({ group, names }: { group: GroupDetail; names: Map<string, str
 }
 
 function SettleUpsTab({ group, names }: { group: GroupDetail; names: Map<string, string> }) {
-  const { data, error, loading } = useLoad(() => api.get<{ settleUps: SettleUpDto[] }>(`/groups/${group.id}/settle-ups`), [group.id]);
+  const { data, error, loading } = useLoad(() => api.get<{ settleUps: SettleUpDto[] }>(`/groups/${group.id}/settle-ups`), [group.id], {
+    reloadOnChange: true,
+  });
   if (loading) return <Skeleton lines={3} />;
   if (error) return <Alert>{error.message}</Alert>;
   return (
     <div className="stack">
       <div>
-        <Link className="btn btn-secondary" to={`/groups/${group.id}/settle-ups/new`}>
+        <Link className="btn btn-secondary" to={`/groups/${group.id}/settle-ups/new`} state={FROM_LIST}>
           Record a payment
         </Link>
       </div>
@@ -201,7 +219,7 @@ function SettleUpsTab({ group, names }: { group: GroupDetail; names: Map<string,
         <ul className="link-list">
           {data.settleUps.map((s) => (
             <li key={s.id}>
-              <Link to={`/groups/${group.id}/settle-ups/${s.id}`} className="link-row">
+              <Link to={`/groups/${group.id}/settle-ups/${s.id}`} state={FROM_LIST} className="link-row">
                 <span className="link-row-title">
                   {names.get(s.fromId)} paid {names.get(s.toId)}
                   <span className="muted small"> · {niceDate(s.date)}</span>
@@ -324,6 +342,7 @@ function MembersTab({ group, reload }: { group: GroupDetail; reload: () => Promi
   const [error, setError] = useState('');
   const [pending, setPending] = useState<PendingAction>(null);
   const { busy, run } = useBusy();
+  const here = useStillHere();
   const people = useLoad(() => api.get<{ people: PersonOption[] }>(`/people?groupId=${group.id}`).then((r) => r.people), [group.id]);
   const current = group.members.filter((m) => m.status === 'current');
   const removed = group.members.filter((m) => m.status === 'removed');
@@ -436,15 +455,24 @@ function MembersTab({ group, reload }: { group: GroupDetail; reload: () => Promi
           await api.post(`/groups/${group.id}/members/${pending.member.id}/remove`);
           setPending(null);
           toast('Member removed');
+          // Left the page meanwhile: the page they're on reloads instead.
+          if (!here.current) return announceChange();
           await reload();
         } else {
           const r = await api.post<{ outcome: 'left' | 'deleted' }>(`/groups/${group.id}/leave`, { confirmDelete: group.iAmLastAccount });
           setPending(null);
           toast(r.outcome === 'deleted' ? 'Group deleted' : 'You left the group');
+          // Only moved to another tab of this group meanwhile: still leave its page.
+          const onGroupPage = window.location.pathname === `/groups/${group.id}`;
+          if (!here.current && !onGroupPage) return announceChange();
           navigate('/groups', { replace: true });
           return 'leaving';
         }
       } catch (err) {
+        if (!here.current) {
+          const what = pending.kind === 'remove' ? `${pending.member.name} wasn't removed.` : "You haven't left the group.";
+          return toast(failedAfterLeaving(what, err), 'error');
+        }
         setPending(null);
         setError((err as ApiError).message);
       }
@@ -681,7 +709,9 @@ function MembersTab({ group, reload }: { group: GroupDetail; reload: () => Promi
 }
 
 function ActivityTab({ groupId }: { groupId: string }) {
-  const { data, error, loading } = useLoad(() => api.get<{ activity: ActivityDto[] }>(`/groups/${groupId}/activity`), [groupId]);
+  const { data, error, loading } = useLoad(() => api.get<{ activity: ActivityDto[] }>(`/groups/${groupId}/activity`), [groupId], {
+    reloadOnChange: true,
+  });
   if (loading) return <Skeleton lines={4} />;
   if (error) return <Alert>{error.message}</Alert>;
   if (!data || data.activity.length === 0) return <EmptyState text="No activity yet. Every change to the group will be listed here." />;

@@ -4,7 +4,7 @@ import type { Account, InviteInfo, InviteResult } from '../../shared/api.js';
 import { checkPassword, checkUsername } from '../../shared/rules.js';
 import { ApiError, api } from '../api.js';
 import { withoutKey } from '../fieldErrors.js';
-import { useBusy, useLoad } from '../hooks.js';
+import { announceChange, failedAfterLeaving, useBusy, useLoad, useStillHere } from '../hooks.js';
 import { useSession } from '../session.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import { useToast } from '../components/Toasts.js';
@@ -48,6 +48,7 @@ export function InvitePage() {
   // Right after signing up here: the recovery code to save, then what the invite did.
   const [signedUp, setSignedUp] = useState<{ recoveryCode: string; result: InviteResult | null } | null>(null);
   const { busy, run } = useBusy();
+  const here = useStillHere();
   // After logging in here without joining, the page changes under the cursor: move it to the heading.
   const heading = useRef<HTMLHeadingElement>(null);
   const focusHeading = useRef(false);
@@ -60,6 +61,8 @@ export function InvitePage() {
 
   const finish = (result: InviteResult | null) => {
     toast(joinedMessage(result));
+    // Left the page while it was joining: stay there, and let it update.
+    if (!here.current) return announceChange();
     navigate('/', { replace: true });
   };
 
@@ -130,6 +133,7 @@ export function InvitePage() {
         finish(r.result);
         return 'leaving';
       } catch (err) {
+        if (!here.current) return toast(failedAfterLeaving('Groups not joined.', err), 'error');
         setFormError((err as ApiError).message);
       }
     });

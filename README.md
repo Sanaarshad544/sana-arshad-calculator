@@ -557,7 +557,7 @@ Every page works on a phone screen, from 360 pixels wide, with nothing cut off o
 
 ### 4.13 Things the app does to help
 
-- **Leaving a form with unsaved changes:** clicking a link or going back asks "You have unsaved changes. Leave without saving?". **Stay** keeps everything you typed, and **Leave** discards it. Closing or reloading the tab shows the browser's own warning.
+- **Leaving a form with unsaved changes:** clicking a link or going back asks "You have unsaved changes. Leave without saving?". **Stay** keeps everything you typed, and **Leave** discards it. Closing or reloading the tab shows the browser's own warning. If you had already pressed **Save bill**, that save still finishes.
 
   ![The unsaved changes question](docs/screenshots/unsaved-changes.png)
 
@@ -566,6 +566,7 @@ Every page works on a phone screen, from 360 pixels wide, with nothing cut off o
 - **Loading:** grey placeholder shapes show while a page loads.
 - **Confirming:** anything you can't undo (delete, remove, leave) asks you to confirm first. The dangerous button is red, and **Cancel** is the safe choice.
 - **Your typing is kept:** if a save fails (for example, the connection drops), you see "Couldn't save — check your connection" and keep everything you typed. Nothing is ever half-saved.
+- **Leaving while something saves:** if you go to another page while a save or delete is still going, it still finishes, you stay where you went, and that page updates to show it. If it fails, a red corner message says what didn't happen, such as "Bill not saved. Check your connection.", and stays for 10 seconds.
 - **Keyboard and screen readers:**
   - Every feature works with the keyboard alone, with a visible focus outline.
   - Every field has a label, messages are read out with their field, and results and corner messages are announced.

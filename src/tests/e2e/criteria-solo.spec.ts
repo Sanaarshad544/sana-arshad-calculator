@@ -857,6 +857,20 @@ test('US-25 #11 with 200 items, "+ Add item" says a bill can have at most 200 it
   await expect(rows).toHaveCount(200);
   await expect(page.getByText(MSG.tooMany, { exact: true })).toHaveCount(0);
 
+  // 200 lines, but all still empty: "+ Add item" goes to the first empty one instead.
+  await add.click();
+  await expect(page.getByLabel('Item 1 name', { exact: true })).toBeFocused();
+  await expect(page.getByText(MSG.tooMany, { exact: true })).toHaveCount(0);
+  await expect(rows).toHaveCount(200);
+
+  // A bill with 200 items in use: no more can be added.
+  const items = Array.from({ length: 200 }, (_, i) => ({ name: `Thing ${i + 1}`, price: '1' }));
+  const { bill } = await api<{ bill: { id: string } }>(page, 'post', '/solo-bills', {
+    currency: '$',
+    bill: { name: 'Big shop', items, tax: { mode: 'amount', value: '0' }, otherCharges: { mode: 'amount', value: '' }, tip: { mode: 'amount', value: '0' }, tipOn: 'items' },
+  });
+  await page.goto(`/solo/${bill.id}/edit`);
+  await expect(rows).toHaveCount(200);
   await add.click();
   await expect(page.getByText(MSG.tooMany, { exact: true })).toBeVisible();
   await expect(rows).toHaveCount(200);

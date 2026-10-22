@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 import type { ChargeInput, ChargeMode, FieldErrors } from '../../shared/bill.js';
 import { MESSAGES } from '../../shared/rules.js';
-import { canAddItem, isBlankItem, newItem, type BillFormState } from '../billEditor.js';
+import { addItemTarget, isBlankItem, newItem, type BillFormState } from '../billEditor.js';
 import { ErrorText, TextField } from './ui.js';
 
 interface Member {
@@ -187,11 +187,17 @@ export function BillForm({ kind, state, onChange, errors, currency, members = []
     set({ items: state.items.map((it) => (it.key === key ? { ...it, ...patch } : it)) });
 
   const addItem = () => {
-    if (!canAddItem(state)) {
+    const target = addItemTarget(state);
+    if (target === null) {
       setTooMany(true);
       return;
     }
     setTooMany(false);
+    // All 200 lines are there, but one is still empty: use that one.
+    if (target !== 'new') {
+      setFocusItem(target);
+      return;
+    }
     edited('items');
     const item = newItem();
     set({ items: [...state.items, item] });
